@@ -261,6 +261,12 @@ void ResourceManager::CheckPreview(reshade::api::command_list* cmd_list, reshade
     if (deviceData.huntPreview.recreate_preview) {
         DisposePreview(device);
         resource_desc desc = deviceData.huntPreview.target_desc;
+        // preview_res[0] (ping) matches the source format so copy_resource(source -> ping) is valid.
+        // preview_res[1] (pong) is ALWAYS R8G8B8A8: it's the buffer the fixed-format copy/alpha-copy
+        // pipeline renders into and that ImGui displays. The pipeline declares R8G8B8A8, so an HDR
+        // pong would mismatch the PSO render-target format and remove the device (the format=10 crash).
+        const reshade::api::format pong_typeless = reshade::api::format::r8g8b8a8_typeless;
+        const reshade::api::format pong_typed = reshade::api::format::r8g8b8a8_unorm;
         resource_desc preview_desc[2] = { resource_desc(desc.texture.width,
                                                         desc.texture.height,
                                                         1,
@@ -274,12 +280,14 @@ void ResourceManager::CheckPreview(reshade::api::command_list* cmd_list, reshade
                                                         desc.texture.height,
                                                         1,
                                                         1,
-                                                        format_to_typeless(desc.texture.format),
+                                                        pong_typeless,
                                                         1,
                                                         memory_heap::gpu_only,
                                                         resource_usage::copy_dest | resource_usage::shader_resource | resource_usage::render_target) };
 
         for (uint32_t i = 0; i < 2; i++) {
+            const reshade::api::format view_typed = (i == 0) ? format_to_default_typed(deviceData.huntPreview.view_format, 0) : pong_typed;
+
             if (!device->create_resource(preview_desc[i], nullptr, resource_usage::shader_resource, &deviceData.resourceManagerData.preview_res[i])) {
                 reshade::log::message(reshade::log::level::error, "Failed to create preview render target!");
             }
@@ -287,7 +295,7 @@ void ResourceManager::CheckPreview(reshade::api::command_list* cmd_list, reshade
             if (deviceData.resourceManagerData.preview_res[i] != 0 &&
                 !device->create_resource_view(deviceData.resourceManagerData.preview_res[i],
                                               resource_usage::shader_resource,
-                                              resource_view_desc(format_to_default_typed(deviceData.huntPreview.view_format, 0)),
+                                              resource_view_desc(view_typed),
                                               &deviceData.resourceManagerData.preview_srv[i])) {
                 reshade::log::message(reshade::log::level::error, "Failed to create preview shader resource view!");
             }
@@ -295,7 +303,7 @@ void ResourceManager::CheckPreview(reshade::api::command_list* cmd_list, reshade
             if (deviceData.resourceManagerData.preview_res[i] != 0 &&
                 !device->create_resource_view(deviceData.resourceManagerData.preview_res[i],
                                               resource_usage::render_target,
-                                              resource_view_desc(format_to_default_typed(deviceData.huntPreview.view_format, 0)),
+                                              resource_view_desc(view_typed),
                                               &deviceData.resourceManagerData.preview_rtv[i])) {
                 reshade::log::message(reshade::log::level::error, "Failed to create preview render target view!");
             }

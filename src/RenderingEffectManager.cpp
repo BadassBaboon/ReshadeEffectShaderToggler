@@ -93,6 +93,29 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         resource_view view_srgb = {};
         resource_view group_view = {};
         resource_desc desc = cmd_list->get_device()->get_resource_desc(active_resource.resource);
+
+        // render_technique requires the target to match the effect/screenshot resolution. Marking a
+        // shader that draws into an off-size buffer (half-res bloom, shadow map, etc.) violates that
+        // and can corrupt the frame or hang on DX12. LOG-ONLY for now (still renders) so we can
+        // confirm real full-screen targets never trip this before we make it actually skip. Throttled
+        // to once per distinct (group,size).
+        {
+            uint32_t eff_w = 0, eff_h = 0;
+            runtime->get_screenshot_width_and_height(&eff_w, &eff_h);
+            if (eff_w != 0 && eff_h != 0 && (desc.texture.width != eff_w || desc.texture.height != eff_h)) {
+                static std::unordered_set<uint64_t> s_logged_size_mismatch;
+                const uint64_t key = (static_cast<uint64_t>(group->getId()) << 40) ^
+                                     (static_cast<uint64_t>(desc.texture.width) << 16) ^ desc.texture.height;
+                if (s_logged_size_mismatch.insert(key).second) {
+                    reshade::log::message(reshade::log::level::warning,
+                        ("[REST] RT size mismatch (effect would render into an off-size target): target=" +
+                         std::to_string(desc.texture.width) + "x" + std::to_string(desc.texture.height) +
+                         " effect=" + std::to_string(eff_w) + "x" + std::to_string(eff_h) +
+                         " - rendering anyway (log-only guard). If this is a target you marked, it's not full-screen.").c_str());
+                }
+            }
+        }
+
         GroupResource& groupResource = group->GetGroupResource(GroupResourceType::RESOURCE_ALPHA);
         const shared_ptr<GlobalResourceView>& view = resourceManager.GetResourceView(runtime->get_device(), active_resource);
         bool copyPreserveAlpha = false;
@@ -102,18 +125,32 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         }
 
         if (group->getPreserveAlpha()) {
-            if (groupResourceManager.IsCompatibleWithGroupFormat(runtime->get_device(), GroupResourceType::RESOURCE_ALPHA, active_resource.resource, group)) {
-                resource group_res = {};
-                groupResourceManager.SetGroupBufferHandles(group, GroupResourceType::RESOURCE_ALPHA, &group_res, &view_non_srgb, &view_srgb, &group_view);
+            resource group_res = {};
+            groupResourceManager.SetGroupBufferHandles(group, GroupResourceType::RESOURCE_ALPHA, &group_res, &view_non_srgb, &view_srgb, &group_view);
+            // group_res can be 0 if the group render target creation failed (e.g. HDR/FP16 targets
+            // whose create_resource fails). Copying into a null resource hangs the GPU, so only take
+            // the preserve-alpha path when the buffer is both format-compatible AND actually created.
+            const bool compatible =
+                groupResourceManager.IsCompatibleWithGroupFormat(runtime->get_device(), GroupResourceType::RESOURCE_ALPHA, active_resource.resource, group);
+            // Also require a single-sampled 2D source: copy_resource of an MSAA / non-2D target
+            // hangs the device on DX12. (HDR sources are already handled - their group_res fails to
+            // create, so group_res == 0 above.)
+            const bool source_copyable = desc.texture.samples <= 1 && desc.type == resource_type::texture_2d;
+            if (group_res != 0 && compatible && source_copyable) {
                 cmd_list->copy_resource(active_resource.resource, group_res);
                 copyPreserveAlpha = true;
             } else {
                 view_non_srgb = view->rtv;
                 view_srgb = view->rtv_srgb;
 
-                groupResource.state = GroupResourceState::RESOURCE_INVALID;
-                groupResource.target_description = desc;
-                groupResource.view_format = active_resource.format;
+                // Only request a (re)created group buffer when the format is incompatible. If it's
+                // compatible but group_res is still 0, creation already failed for this target
+                // (e.g. HDR) - don't loop trying to recreate it every frame; just render directly.
+                if (!compatible) {
+                    groupResource.state = GroupResourceState::RESOURCE_INVALID;
+                    groupResource.target_description = desc;
+                    groupResource.view_format = active_resource.format;
+                }
             }
         } else {
             view_non_srgb = view->rtv;

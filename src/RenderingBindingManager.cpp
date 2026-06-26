@@ -223,7 +223,20 @@ void RenderingBindingManager::_UpdateTextureBindings(command_list* cmd_list,
 
                 resource target_res = bindingResource.res;
 
-                if (retUpdate && target_res != 0) {
+                // Only copy when the source is safely copyable. Multisampled / non-2D copies are
+                // invalid on every API. The HDR/FP16 live-buffer TDR is DX12/Vulkan-specific, so the
+                // format restriction is gated to those APIs - DX9/10/11 copy-binding keeps working for
+                // any format. The non-copy binding mode above is unaffected; this only gates "Copy binding".
+                const bool strict_bind = (runtime->get_device()->get_api() == device_api::d3d12 ||
+                                          runtime->get_device()->get_api() == device_api::vulkan);
+                const reshade::api::format bind_typeless = format_to_typeless(resDesc.texture.format);
+                const bool bind_copyable = resDesc.texture.samples <= 1 &&
+                                           resDesc.type == resource_type::texture_2d &&
+                                           (!strict_bind ||
+                                            bind_typeless == reshade::api::format::r8g8b8a8_typeless ||
+                                            bind_typeless == reshade::api::format::b8g8r8a8_typeless);
+
+                if (retUpdate && target_res != 0 && bind_copyable) {
                     cmd_list->copy_resource(bindingData.resource, target_res);
 
                     if (group->getFlipBufferBinding() && bindingResource.rtv != 0 && runtimeData.specialEffects[REST_FLIP].technique != 0) {
