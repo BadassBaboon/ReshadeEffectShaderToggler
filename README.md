@@ -4,7 +4,8 @@ encountered within a game's rendering pipeline.
 
 It's mainly for 64bit reshade. There's a 32bit version in the releases, but it's not actively maintained/tested.
 
-DX12 and Vulkan support is mostly untested and probably pretty bad.
+## Fork notes
+This fork aims to resolve the issues of the REST add-on with DX12 and Vulkan. Crashes related to shader hunting and browsing, HDR targets, preview pipeline format and alpha prevervation are fixed while keeping the DX11 compatibility.
 
 ## How to use
 Place the `ReshadeEffectShaderToggler.addon` in the same folder as where the game exe is located. This is in most cases the same folder as where the Reshade 5.8+ dll
