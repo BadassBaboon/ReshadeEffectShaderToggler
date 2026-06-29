@@ -24,8 +24,8 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
     }
 
     device* device = cmd_list->get_device();
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
-    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    CommandListDataContainer& commandListData = *cmd_list->get_private_data<CommandListDataContainer>();
+    DeviceDataContainer& deviceData = *device->get_private_data<DeviceDataContainer>();
 
     // Remove call location from queue
     commandListData.commandQueue &= ~(invocation << (callLocation * MATCH_DELIMITER));
@@ -34,7 +34,7 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
         return;
     }
 
-    RuntimeDataContainer& runtimeData = deviceData.current_runtime->get_private_data<RuntimeDataContainer>();
+    RuntimeDataContainer& runtimeData = *deviceData.current_runtime->get_private_data<RuntimeDataContainer>();
 
     ToggleGroup& group = uiData.GetToggleGroups().at(uiData.GetToggleGroupIdShaderEditing());
 
@@ -85,7 +85,7 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
             // render target here). on_barrier() then follows any transitions the game makes before
             // we copy it, so we know its REAL state at copy time (e.g. HDR buffers get moved to
             // shader_resource for post-processing - assuming render_target there hangs the device).
-            cmd_list->get_private_data<state_tracking>().start_resource_barrier_tracking(active_target.resource, resource_usage::render_target);
+            cmd_list->get_private_data<state_tracking>()->start_resource_barrier_tracking(active_target.resource, resource_usage::render_target);
 
             deviceData.huntPreview.target = active_target.resource;
             deviceData.huntPreview.target_desc = desc;
@@ -119,7 +119,7 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
         // Real current state of the source on this command list. If unknown (capture happened on a
         // different command list, or no barrier was tracked), we can't safely transition+copy it,
         // so skip the preview rather than guess a state and hang the device.
-        const resource_usage rs_usage = cmd_list->get_private_data<state_tracking>().stop_resource_barrier_tracking(rs);
+        const resource_usage rs_usage = cmd_list->get_private_data<state_tracking>()->stop_resource_barrier_tracking(rs);
         if (rs_usage == resource_usage::undefined) {
             reshade::log::message(reshade::log::level::warning,
                 "[REST] Preview skipped: source state unknown on this command list (can't safely copy).");

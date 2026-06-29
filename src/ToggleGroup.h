@@ -117,6 +117,7 @@ class ToggleGroup {
     bool isEditing() { return _isEditing; }
     bool isEmpty() const { return _vertexShaderHashes.size() <= 0 && _pixelShaderHashes.size() <= 0; }
     int getId() const { return _id; }
+    void setId(int id) { _id = id; }
     const std::unordered_set<std::string>& preferredTechniques() const { return _preferredTechniques; }
     void setPreferredTechniques(std::unordered_set<std::string>& techniques) { _preferredTechniques = techniques; }
     std::unordered_set<uint32_t> getPixelShaderHashes() const { return _pixelShaderHashes; }

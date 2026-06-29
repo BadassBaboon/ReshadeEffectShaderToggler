@@ -17,7 +17,7 @@ void RenderingBindingManager::InitTextureBingings(effect_runtime* runtime) {
     if (runtime == nullptr || runtime->get_device() == nullptr)
         return;
 
-    DeviceDataContainer& data = runtime->get_device()->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = *runtime->get_device()->get_private_data<DeviceDataContainer>();
 
     // Init empty texture
     CreateTextureBinding(runtime,
@@ -28,7 +28,7 @@ void RenderingBindingManager::InitTextureBingings(effect_runtime* runtime) {
 }
 
 void RenderingBindingManager::DisposeTextureBindings(device* device, std::unordered_map<int, ShaderToggler::ToggleGroup>& groups) {
-    DeviceDataContainer& data = device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = *device->get_private_data<DeviceDataContainer>();
 
     unique_lock<shared_mutex> lock(data.binding_mutex);
 
@@ -110,7 +110,7 @@ uint32_t RenderingBindingManager::UpdateTextureBinding(effect_runtime* runtime,
                                                        resource res,
                                                        const resource_desc& desc,
                                                        reshade::api::format viewformat) {
-    DeviceDataContainer& data = runtime->get_device()->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = *runtime->get_device()->get_private_data<DeviceDataContainer>();
     GroupResource& groupResource = group->GetGroupResource(ShaderToggler::GroupResourceType::RESOURCE_BINDING);
 
     // Switch from game's buffer to internal copy
@@ -186,7 +186,7 @@ void RenderingBindingManager::_UpdateTextureBindings(command_list* cmd_list,
     if (runtime == nullptr)
         return;
 
-    auto& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
+    auto& runtimeData = *runtime->get_private_data<RuntimeDataContainer>();
 
     for (auto& [group, bindingData] : bindingsToUpdate) {
         if (toUpdateBindings.contains(group) && !deviceData.bindingsUpdated.contains(group)) {
@@ -258,8 +258,8 @@ void RenderingBindingManager::UpdateTextureBindings(command_list* cmd_list, uint
     }
 
     device* device = cmd_list->get_device();
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
-    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    CommandListDataContainer& commandListData = *cmd_list->get_private_data<CommandListDataContainer>();
+    DeviceDataContainer& deviceData = *device->get_private_data<DeviceDataContainer>();
 
     // Remove call location from queue
     commandListData.commandQueue &= ~(invocation << (callLocation * MATCH_DELIMITER));
@@ -320,7 +320,7 @@ void RenderingBindingManager::UpdateTextureBindings(command_list* cmd_list, uint
 }
 
 void RenderingBindingManager::ClearUnmatchedTextureBindings(reshade::api::command_list* cmd_list) {
-    DeviceDataContainer& data = cmd_list->get_device()->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = *cmd_list->get_device()->get_private_data<DeviceDataContainer>();
 
     shared_lock<shared_mutex> mtx(data.binding_mutex);
 

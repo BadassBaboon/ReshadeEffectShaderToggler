@@ -58,14 +58,23 @@ enum Keybind : uint32_t {
     INVOCATION_DOWN,
     INVOCATION_UP,
     DESCRIPTOR_DOWN,
-    DESCRIPTOR_UP
+    DESCRIPTOR_UP,
+    TOGGLE_ALL_GROUPS
 };
 
+// Stable ini keys (do not reorder/rename existing entries; append only).
 static const char* KeybindNames[] = { "PIXEL_SHADER_DOWN",        "PIXEL_SHADER_UP",        "PIXEL_SHADER_MARK",
                                       "PIXEL_SHADER_MARKED_DOWN", "PIXEL_SHADER_MARKED_UP", "VERTEX_SHADER_DOWN",
                                       "VERTEX_SHADER_UP",         "VERTEX_SHADER_MARK",     "VERTEX_SHADER_MARKED_DOWN",
                                       "VERTEX_SHADER_MARKED_UP",  "INVOCATION_DOWN",        "INVOCATION_UP",
-                                      "DESCRIPTOR_DOWN",          "DESCRIPTOR_UP" };
+                                      "DESCRIPTOR_DOWN",          "DESCRIPTOR_UP",          "TOGGLE_ALL_GROUPS" };
+
+// Human-friendly labels shown in the Keybindings UI (parallel to KeybindNames).
+static const char* KeybindDisplayNames[] = { "Pixel shader: previous",        "Pixel shader: next",          "Pixel shader: mark/unmark",
+                                             "Marked pixel shader: previous", "Marked pixel shader: next",   "Vertex shader: previous",
+                                             "Vertex shader: next",           "Vertex shader: mark/unmark",  "Marked vertex shader: previous",
+                                             "Marked vertex shader: next",    "Invocation: previous",        "Invocation: next",
+                                             "Descriptor: previous",          "Descriptor: next",            "Toggle ALL groups on/off" };
 
 enum TabType : uint32_t {
     TAB_NONE = 0,

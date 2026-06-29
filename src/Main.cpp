@@ -118,7 +118,7 @@ static void onInitDevice(device* device) {
 }
 
 static void onDestroyDevice(device* device) {
-    DeviceDataContainer& data = device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = *device->get_private_data<DeviceDataContainer>();
 
     groupResourceManager.DisposeGroupBuffers(device, g_addonUIData.GetToggleGroups());
     renderingBindingManager.DisposeTextureBindings(device, g_addonUIData.GetToggleGroups());
@@ -137,20 +137,20 @@ static void onDestroyCommandList(command_list* commandList) {
 }
 
 static void onResetCommandList(command_list* commandList) {
-    CommandListDataContainer& commandListData = commandList->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& commandListData = *commandList->get_private_data<CommandListDataContainer>();
     commandListData.Reset();
 }
 
-static bool onCreateSwapchain(swapchain_desc& desc, void* hwnd) {
+static bool onCreateSwapchain(device_api api, swapchain_desc& desc, void* hwnd) {
     return resourceManager.OnCreateSwapchain(desc, hwnd);
 }
 
-static void onInitSwapchain(reshade::api::swapchain* swapchain) {
-    resourceManager.OnInitSwapchain(swapchain);
+static void onInitSwapchain(reshade::api::swapchain* swapchain, bool resize) {
+    resourceManager.OnInitSwapchain(swapchain, resize);
 }
 
-static void onDestroySwapchain(reshade::api::swapchain* swapchain) {
-    resourceManager.OnDestroySwapchain(swapchain);
+static void onDestroySwapchain(reshade::api::swapchain* swapchain, bool resize) {
+    resourceManager.OnDestroySwapchain(swapchain, resize);
 }
 
 static bool onCreateResource(device* device, resource_desc& desc, subresource_data* initial_data, resource_usage initial_state) {
@@ -184,8 +184,8 @@ static void onDestroyResourceView(device* device, resource_view view) {
 }
 
 static void onReshadeReloadedEffects(effect_runtime* runtime) {
-    RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
-    DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
+    RuntimeDataContainer& runtimeData = *runtime->get_private_data<RuntimeDataContainer>();
+    DeviceDataContainer& deviceData = *runtime->get_device()->get_private_data<DeviceDataContainer>();
 
     techniqueManager.OnReshadeReloadedEffects(runtime);
 
@@ -196,7 +196,7 @@ static void onReshadeReloadedEffects(effect_runtime* runtime) {
 }
 
 static bool onReshadeSetTechniqueState(effect_runtime* runtime, effect_technique technique, bool enabled) {
-    RuntimeDataContainer& data = runtime->get_private_data<RuntimeDataContainer>();
+    RuntimeDataContainer& data = *runtime->get_private_data<RuntimeDataContainer>();
 
     bool ret = techniqueManager.OnReshadeSetTechniqueState(runtime, technique, enabled);
 
@@ -204,8 +204,8 @@ static bool onReshadeSetTechniqueState(effect_runtime* runtime, effect_technique
 }
 
 static bool onReshadeReorderTechniques(effect_runtime* runtime, size_t count, effect_technique* techniques) {
-    RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
-    DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
+    RuntimeDataContainer& runtimeData = *runtime->get_private_data<RuntimeDataContainer>();
+    DeviceDataContainer& deviceData = *runtime->get_device()->get_private_data<DeviceDataContainer>();
 
     bool ret = techniqueManager.OnReshadeReorderTechniques(runtime, count, techniques);
 
@@ -219,7 +219,7 @@ static bool onReshadeReorderTechniques(effect_runtime* runtime, size_t count, ef
 
 static void onInitEffectRuntime(effect_runtime* runtime) {
     runtime->create_private_data<RuntimeDataContainer>();
-    DeviceDataContainer& data = runtime->get_device()->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = *runtime->get_device()->get_private_data<DeviceDataContainer>();
 
     keyMonitor.Init(runtime);
     renderingShaderManager.InitShaders(runtime->get_device());
@@ -236,7 +236,7 @@ static void onInitEffectRuntime(effect_runtime* runtime) {
 }
 
 static void onDestroyEffectRuntime(effect_runtime* runtime) {
-    DeviceDataContainer& data = runtime->get_device()->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = *runtime->get_device()->get_private_data<DeviceDataContainer>();
 
     renderingBindingManager.DisposeTextureBindings(runtime->get_device(), g_addonUIData.GetToggleGroups());
 
@@ -311,8 +311,8 @@ static void onBindPipeline(command_list* commandList, pipeline_stage stages, pip
         // draw call with unknown handle, don't collect it
         return;
     }
-    CommandListDataContainer& commandListData = commandList->get_private_data<CommandListDataContainer>();
-    DeviceDataContainer& deviceData = commandList->get_device()->get_private_data<DeviceDataContainer>();
+    CommandListDataContainer& commandListData = *commandList->get_private_data<CommandListDataContainer>();
+    DeviceDataContainer& deviceData = *commandList->get_device()->get_private_data<DeviceDataContainer>();
 
     if (deviceData.current_runtime == nullptr || !deviceData.current_runtime->get_effects_state()) {
         return;
@@ -390,8 +390,8 @@ static void onBindRenderTargetsAndDepthStencil(command_list* cmd_list, uint32_t 
     }
 
     device* device = cmd_list->get_device();
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
-    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    CommandListDataContainer& commandListData = *cmd_list->get_private_data<CommandListDataContainer>();
+    DeviceDataContainer& deviceData = *device->get_private_data<DeviceDataContainer>();
 
     // if (count > 0)
     //{
@@ -420,8 +420,8 @@ static void onBeginRenderPass(command_list* cmd_list, uint32_t count, const rend
     }
 
     device* device = cmd_list->get_device();
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
-    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    CommandListDataContainer& commandListData = *cmd_list->get_private_data<CommandListDataContainer>();
+    DeviceDataContainer& deviceData = *device->get_private_data<DeviceDataContainer>();
 
     if (!deviceData.current_runtime->get_effects_state()) {
         return;
@@ -447,7 +447,7 @@ static void onPresent(command_queue* queue,
                       uint32_t dirty_rect_count,
                       const rect* dirty_rects) {
     device* dev = queue->get_device();
-    DeviceDataContainer& deviceData = dev->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& deviceData = *dev->get_private_data<DeviceDataContainer>();
 
     if (deviceData.current_runtime == nullptr) {
         return;
@@ -467,7 +467,7 @@ static void onPresent(command_queue* queue,
 
 static void onReshadePresent(effect_runtime* runtime) {
     device* dev = runtime->get_device();
-    DeviceDataContainer& deviceData = dev->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& deviceData = *dev->get_private_data<DeviceDataContainer>();
     command_queue* queue = runtime->get_command_queue();
 
     deviceData.rendered_effects = false;
@@ -533,7 +533,7 @@ static void UnInit() {
 }
 
 static void CheckDrawCall(command_list* cmd_list, const uint64_t match_modifier = Rendering::MATCH_ALL) {
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& commandListData = *cmd_list->get_private_data<CommandListDataContainer>();
 
     if (commandListData.commandQueue & Rendering::MATCH_ALL & match_modifier) {
         if (constantHandler != nullptr && (commandListData.commandQueue & Rendering::MATCH_CONST & match_modifier)) {

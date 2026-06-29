@@ -141,7 +141,7 @@ const ResourceViewData RenderingManager::GetCurrentResourceView(command_list* cm
 
     device* device = deviceData.current_runtime->get_device();
 
-    state_tracking& state = cmd_list->get_private_data<state_tracking>();
+    state_tracking& state = *cmd_list->get_private_data<state_tracking>();
     const vector<resource_view>& rtvs = state.render_targets;
 
     size_t index = group->getRenderTargetIndex();

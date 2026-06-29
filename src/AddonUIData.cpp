@@ -62,6 +62,7 @@ AddonUIData::AddonUIData(ShaderManager* pixelShaderManager, ShaderManager* verte
     _keyBindings[Keybind::INVOCATION_UP] = VK_NUMPAD8;
     _keyBindings[Keybind::DESCRIPTOR_DOWN] = VK_SUBTRACT;
     _keyBindings[Keybind::DESCRIPTOR_UP] = VK_ADD;
+    _keyBindings[Keybind::TOGGLE_ALL_GROUPS] = 0; // unbound by default
 }
 
 

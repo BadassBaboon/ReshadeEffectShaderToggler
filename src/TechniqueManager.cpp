@@ -31,7 +31,7 @@ void TechniqueManager::SignalEffectsReloaded(reshade::api::effect_runtime* runti
 }
 
 void TechniqueManager::OnReshadeReloadedEffects(reshade::api::effect_runtime* runtime) {
-    RuntimeDataContainer& data = runtime->get_private_data<RuntimeDataContainer>();
+    RuntimeDataContainer& data = *runtime->get_private_data<RuntimeDataContainer>();
     unique_lock<shared_mutex> lock(data.technique_mutex);
 
     data.allEnabledTechniques.clear();
@@ -76,7 +76,7 @@ void TechniqueManager::OnReshadeReloadedEffects(reshade::api::effect_runtime* ru
 }
 
 bool TechniqueManager::OnReshadeSetTechniqueState(reshade::api::effect_runtime* runtime, reshade::api::effect_technique technique, bool enabled) {
-    RuntimeDataContainer& data = runtime->get_private_data<RuntimeDataContainer>();
+    RuntimeDataContainer& data = *runtime->get_private_data<RuntimeDataContainer>();
     unique_lock<shared_mutex> lock(data.technique_mutex);
 
     charBufferSize = CHAR_BUFFER_SIZE;
@@ -118,7 +118,7 @@ bool TechniqueManager::OnReshadeSetTechniqueState(reshade::api::effect_runtime* 
 }
 
 bool TechniqueManager::OnReshadeReorderTechniques(reshade::api::effect_runtime* runtime, size_t count, reshade::api::effect_technique* techniques) {
-    RuntimeDataContainer& data = runtime->get_private_data<RuntimeDataContainer>();
+    RuntimeDataContainer& data = *runtime->get_private_data<RuntimeDataContainer>();
     unique_lock<shared_mutex> lock(data.technique_mutex);
 
     data.allEnabledTechniques.clear();
@@ -166,7 +166,7 @@ bool TechniqueManager::OnReshadeReorderTechniques(reshade::api::effect_runtime* 
 }
 
 void TechniqueManager::OnReshadePresent(reshade::api::effect_runtime* runtime) {
-    RuntimeDataContainer& deviceData = runtime->get_private_data<RuntimeDataContainer>();
+    RuntimeDataContainer& deviceData = *runtime->get_private_data<RuntimeDataContainer>();
     unique_lock<shared_mutex> lock(deviceData.technique_mutex);
 
     for (auto el = deviceData.allEnabledTechniques.begin(); el != deviceData.allEnabledTechniques.end();) {

@@ -25,8 +25,8 @@ bool RenderingEffectManager::RenderRemainingEffects(effect_runtime* runtime) {
 
     command_list* cmd_list = runtime->get_command_queue()->get_immediate_command_list();
     device* device = runtime->get_device();
-    RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
-    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    RuntimeDataContainer& runtimeData = *runtime->get_private_data<RuntimeDataContainer>();
+    DeviceDataContainer& deviceData = *device->get_private_data<DeviceDataContainer>();
     bool rendered = false;
 
     resource res = runtime->get_current_back_buffer();
@@ -59,7 +59,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                                             vector<EffectData*>& removalList,
                                             const unordered_set<EffectData*>& toRenderNames) {
     bool rendered = false;
-    CommandListDataContainer& cmdData = cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& cmdData = *cmd_list->get_private_data<CommandListDataContainer>();
     effect_runtime* runtime = deviceData.current_runtime;
 
     unordered_map<ToggleGroup*, pair<vector<EffectData*>, ResourceRenderData>> groupTechMap;
@@ -205,8 +205,8 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
     }
 
     device* device = cmd_list->get_device();
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
-    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    CommandListDataContainer& commandListData = *cmd_list->get_private_data<CommandListDataContainer>();
+    DeviceDataContainer& deviceData = *device->get_private_data<DeviceDataContainer>();
 
     // Remove call location from queue
     commandListData.commandQueue &= ~(invocation << (callLocation * MATCH_DELIMITER));
@@ -218,7 +218,7 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
         return;
     }
 
-    RuntimeDataContainer& runtimeData = deviceData.current_runtime->get_private_data<RuntimeDataContainer>();
+    RuntimeDataContainer& runtimeData = *deviceData.current_runtime->get_private_data<RuntimeDataContainer>();
     bool toRender = false;
     unordered_set<EffectData*> psToRenderNames;
     unordered_set<EffectData*> vsToRenderNames;
@@ -275,7 +275,7 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
     }
 
     if (rendered) {
-        cmd_list->get_private_data<state_tracking>().apply(cmd_list);
+        cmd_list->get_private_data<state_tracking>()->apply(cmd_list);
     }
 }
 
@@ -283,8 +283,8 @@ void RenderingEffectManager::PreventRuntimeReload(reshade::api::effect_runtime* 
     if (runtime == nullptr)
         return;
 
-    RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
-    DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
+    RuntimeDataContainer& runtimeData = *runtime->get_private_data<RuntimeDataContainer>();
+    DeviceDataContainer& deviceData = *runtime->get_device()->get_private_data<DeviceDataContainer>();
 
     // cringe
     if (runtimeData.specialEffects[REST_NOOP].technique != 0) {
