@@ -95,9 +95,13 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
             deviceData.huntPreview.height = desc.texture.height;
 
             // Log each distinct captured target once (this runs every frame while hunting).
-            static uint64_t s_last_captured_handle = 0;
-            if (active_target.resource.handle != s_last_captured_handle) {
-                s_last_captured_handle = active_target.resource.handle;
+            static uint32_t s_last_width = 0;
+            static uint32_t s_last_height = 0;
+            static reshade::api::format s_last_format = reshade::api::format::unknown;
+            if (desc.texture.width != s_last_width || desc.texture.height != s_last_height || desc.texture.format != s_last_format) {
+                s_last_width = desc.texture.width;
+                s_last_height = desc.texture.height;
+                s_last_format = desc.texture.format;
                 reshade::log::message(reshade::log::level::debug,
                     ("[REST] Preview target captured: " + std::to_string(desc.texture.width) + "x" + std::to_string(desc.texture.height) +
                      " samples=" + std::to_string(desc.texture.samples) +

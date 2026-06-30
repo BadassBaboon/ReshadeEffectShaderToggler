@@ -120,6 +120,10 @@ struct __declspec(novtable) CustomShader final {
     CustomShaderInstance copyPipeline;
     CustomShaderInstance alphaPreservingCopyPipeline;
 
+    std::unordered_map<reshade::api::format, reshade::api::pipeline> copyPipelinesByFormat;
+    std::unordered_map<reshade::api::format, reshade::api::pipeline> alphaPreservingCopyPipelinesByFormat;
+    std::shared_mutex pipeline_mutex;
+
     reshade::api::resource fullscreenQuadVertexBuffer = { 0 };
 };
 

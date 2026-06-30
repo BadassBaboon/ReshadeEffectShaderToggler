@@ -237,20 +237,21 @@ void RenderingBindingManager::_UpdateTextureBindings(command_list* cmd_list,
                                             bind_typeless == reshade::api::format::b8g8r8a8_typeless);
 
                 if (retUpdate && target_res != 0 && bind_copyable) {
+                    std::vector<reshade::api::resource_view> bound_rtvs;
+                    reshade::api::resource_view bound_dsv = { 0 };
+
                     if (strict_bind) {
-                        const reshade::api::resource res2[2] = { bindingData.resource, target_res };
-                        const reshade::api::resource_usage before[2] = { reshade::api::resource_usage::shader_resource, reshade::api::resource_usage::shader_resource };
-                        const reshade::api::resource_usage during[2] = { reshade::api::resource_usage::copy_source, reshade::api::resource_usage::copy_dest };
-                        cmd_list->barrier(2, res2, before, during);
+                        bound_rtvs = cmd_list->get_private_data<state_tracking>().render_targets;
+                        bound_dsv = cmd_list->get_private_data<state_tracking>().depth_stencil;
+                        // Unbind render targets so we can safely transition them without DX12 validation errors
+                        cmd_list->bind_render_targets_and_depth_stencil(0, nullptr, { 0 });
                     }
 
                     cmd_list->copy_resource(bindingData.resource, target_res);
 
                     if (strict_bind) {
-                        const reshade::api::resource res2[2] = { bindingData.resource, target_res };
-                        const reshade::api::resource_usage before[2] = { reshade::api::resource_usage::shader_resource, reshade::api::resource_usage::shader_resource };
-                        const reshade::api::resource_usage during[2] = { reshade::api::resource_usage::copy_source, reshade::api::resource_usage::copy_dest };
-                        cmd_list->barrier(2, res2, during, before); // transition back
+                        // Rebind targets. ReShade's wrapper will automatically transition them back to RENDER_TARGET.
+                        cmd_list->bind_render_targets_and_depth_stencil(static_cast<uint32_t>(bound_rtvs.size()), bound_rtvs.data(), bound_dsv);
                     }
 
                     if (group->getFlipBufferBinding() && bindingResource.rtv != 0 && runtimeData.specialEffects[REST_FLIP].technique != 0) {

@@ -127,18 +127,22 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         if (group->getPreserveAlpha()) {
             resource group_res = {};
             groupResourceManager.SetGroupBufferHandles(group, GroupResourceType::RESOURCE_ALPHA, &group_res, &view_non_srgb, &view_srgb, &group_view);
+            
+            const bool strict_copy = (runtime->get_device()->get_api() == reshade::api::device_api::d3d12 || runtime->get_device()->get_api() == reshade::api::device_api::vulkan);
+            const reshade::api::format copy_typeless = format_to_typeless(desc.texture.format);
+            const bool format_copyable = !strict_copy ||
+                                         copy_typeless == reshade::api::format::r8g8b8a8_typeless ||
+                                         copy_typeless == reshade::api::format::b8g8r8a8_typeless;
+
             // group_res can be 0 if the group render target creation failed (e.g. HDR/FP16 targets
             // whose create_resource fails). Copying into a null resource hangs the GPU, so only take
             // the preserve-alpha path when the buffer is both format-compatible AND actually created.
             const bool compatible =
                 groupResourceManager.IsCompatibleWithGroupFormat(runtime->get_device(), GroupResourceType::RESOURCE_ALPHA, active_resource.resource, group);
             // Also require a single-sampled 2D source: copy_resource of an MSAA / non-2D target
-            // hangs the device on DX12. (HDR sources are already handled - their group_res fails to
-            // create, so group_res == 0 above.)
-            const bool source_copyable = desc.texture.samples <= 1 && desc.type == resource_type::texture_2d;
+            // hangs the device on DX12.
+            const bool source_copyable = desc.texture.samples <= 1 && desc.type == resource_type::texture_2d && format_copyable;
             if (group_res != 0 && compatible && source_copyable) {
-                const bool strict_copy = (runtime->get_device()->get_api() == reshade::api::device_api::d3d12 || runtime->get_device()->get_api() == reshade::api::device_api::vulkan);
-
                 std::vector<reshade::api::resource_view> bound_rtvs;
                 reshade::api::resource_view bound_dsv = { 0 };
 
@@ -147,22 +151,12 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                     bound_dsv = cmd_list->get_private_data<state_tracking>().depth_stencil;
                     // Unbind render targets so we can safely transition them without DX12 validation errors
                     cmd_list->bind_render_targets_and_depth_stencil(0, nullptr, { 0 });
-
-                    const reshade::api::resource res2[2] = { active_resource.resource, group_res };
-                    const reshade::api::resource_usage before[2] = { reshade::api::resource_usage::render_target, reshade::api::resource_usage::shader_resource };
-                    const reshade::api::resource_usage during[2] = { reshade::api::resource_usage::copy_source, reshade::api::resource_usage::copy_dest };
-                    cmd_list->barrier(2, res2, before, during);
                 }
 
                 cmd_list->copy_resource(active_resource.resource, group_res);
 
                 if (strict_copy) {
-                    const reshade::api::resource res2[2] = { active_resource.resource, group_res };
-                    const reshade::api::resource_usage before[2] = { reshade::api::resource_usage::render_target, reshade::api::resource_usage::shader_resource };
-                    const reshade::api::resource_usage during[2] = { reshade::api::resource_usage::copy_source, reshade::api::resource_usage::copy_dest };
-                    cmd_list->barrier(2, res2, during, before); // transition back
-
-                    // Rebind
+                    // Rebind targets. ReShade's wrapper will automatically transition them back to RENDER_TARGET.
                     cmd_list->bind_render_targets_and_depth_stencil(static_cast<uint32_t>(bound_rtvs.size()), bound_rtvs.data(), bound_dsv);
                 }
                 

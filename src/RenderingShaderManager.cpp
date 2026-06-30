@@ -155,6 +155,20 @@ void RenderingShaderManager::DestroyShaders(reshade::api::device* device) {
         shader.customShader.alphaPreservingCopyPipeline.pipeline = { 0 };
     }
 
+    for (auto& pair : shader.customShader.copyPipelinesByFormat) {
+        if (pair.second != 0) {
+            device->destroy_pipeline(pair.second);
+        }
+    }
+    shader.customShader.copyPipelinesByFormat.clear();
+
+    for (auto& pair : shader.customShader.alphaPreservingCopyPipelinesByFormat) {
+        if (pair.second != 0) {
+            device->destroy_pipeline(pair.second);
+        }
+    }
+    shader.customShader.alphaPreservingCopyPipelinesByFormat.clear();
+
     if (shader.customShader.copyPipeline.pipelineLayout != 0) {
         device->destroy_pipeline_layout(shader.customShader.copyPipeline.pipelineLayout);
         shader.customShader.copyPipeline.pipelineLayout = { 0 };
@@ -174,6 +188,72 @@ void RenderingShaderManager::DestroyShaders(reshade::api::device* device) {
         device->destroy_sampler(shader.customShader.alphaPreservingCopyPipeline.pipelineSampler);
         shader.customShader.alphaPreservingCopyPipeline.pipelineSampler = { 0 };
     }
+}
+
+reshade::api::pipeline RenderingShaderManager::GetOrCompilePipeline(reshade::api::device* device,
+                                                                    uint16_t ps_resource_id,
+                                                                    uint16_t vs_resource_id,
+                                                                    reshade::api::pipeline_layout sh_layout,
+                                                                    uint8_t write_mask,
+                                                                    reshade::api::format target_format,
+                                                                    std::unordered_map<reshade::api::format, reshade::api::pipeline>& cache,
+                                                                    std::shared_mutex& mutex) {
+    if (sh_layout == 0 || !(device->get_api() == reshade::api::device_api::d3d9 || device->get_api() == reshade::api::device_api::d3d10 ||
+                            device->get_api() == reshade::api::device_api::d3d11 || device->get_api() == reshade::api::device_api::d3d12 ||
+                            device->get_api() == reshade::api::device_api::vulkan)) {
+        return { 0 };
+    }
+
+    {
+        std::shared_lock<std::shared_mutex> lock(mutex);
+        auto it = cache.find(target_format);
+        if (it != cache.end()) {
+            return it->second;
+        }
+    }
+
+    std::unique_lock<std::shared_mutex> lock(mutex);
+    // Double check cache after acquiring exclusive lock
+    auto it = cache.find(target_format);
+    if (it != cache.end()) {
+        return it->second;
+    }
+
+    const EmbeddedResourceData vs = resourceManager.GetResourceData(vs_resource_id);
+    const EmbeddedResourceData ps = resourceManager.GetResourceData(ps_resource_id);
+
+    reshade::api::shader_desc vs_desc = { vs.data, vs.size };
+    reshade::api::shader_desc ps_desc = { ps.data, ps.size };
+
+    std::vector<reshade::api::pipeline_subobject> subobjects;
+    subobjects.push_back({ reshade::api::pipeline_subobject_type::vertex_shader, 1, &vs_desc });
+    subobjects.push_back({ reshade::api::pipeline_subobject_type::pixel_shader, 1, &ps_desc });
+
+    if (device->get_api() == reshade::api::device_api::d3d9) {
+        static reshade::api::input_element layout[1] = {
+            { 0, "TEXCOORD", 0, reshade::api::format::r32g32_float, 0, offsetof(vert_input, uv), sizeof(vert_input), 0 },
+        };
+        subobjects.push_back({ reshade::api::pipeline_subobject_type::input_layout, 1, reinterpret_cast<void*>(layout) });
+    }
+
+    reshade::api::primitive_topology topology = reshade::api::primitive_topology::triangle_list;
+    subobjects.push_back({ reshade::api::pipeline_subobject_type::primitive_topology, 1, &topology });
+
+    reshade::api::blend_desc blend_state;
+    blend_state.render_target_write_mask[0] = write_mask;
+    subobjects.push_back({ reshade::api::pipeline_subobject_type::blend_state, 1, &blend_state });
+
+    reshade::api::format render_target_format = reshade::api::format_to_default_typed(target_format, 0);
+    subobjects.push_back({ reshade::api::pipeline_subobject_type::render_target_formats, 1, &render_target_format });
+
+    reshade::api::pipeline sh_pipeline = { 0 };
+    if (!device->create_pipeline(sh_layout, static_cast<uint32_t>(subobjects.size()), subobjects.data(), &sh_pipeline)) {
+        reshade::log::message(reshade::log::level::warning, "Unable to dynamically compile pipeline for target format");
+        return { 0 };
+    }
+
+    cache[target_format] = sh_pipeline;
+    return sh_pipeline;
 }
 
 void RenderingShaderManager::ApplyShader(command_list* cmd_list,
@@ -220,10 +300,20 @@ void RenderingShaderManager::CopyResource(command_list* cmd_list, resource_view 
     device* device = cmd_list->get_device();
     DeviceDataContainer& data = device->get_private_data<DeviceDataContainer>();
 
+    reshade::api::format target_format = device->get_resource_desc(device->get_resource_from_view(rtv_dst)).texture.format;
+    reshade::api::pipeline pipeline = GetOrCompilePipeline(device,
+        device->get_api() == device_api::d3d9 ? SHADER_PREVIEW_COPY_PS_3_0 : SHADER_PREVIEW_COPY_PS_4_0,
+        device->get_api() == device_api::d3d9 ? SHADER_FULLSCREEN_VS_3_0 : SHADER_FULLSCREEN_VS_4_0,
+        data.customShader.copyPipeline.pipelineLayout,
+        0xF,
+        target_format,
+        data.customShader.copyPipelinesByFormat,
+        data.customShader.pipeline_mutex);
+
     ApplyShader(cmd_list,
                 srv_src,
                 rtv_dst,
-                data.customShader.copyPipeline.pipeline,
+                pipeline,
                 data.customShader.copyPipeline.pipelineLayout,
                 data.customShader.copyPipeline.pipelineSampler,
                 data.customShader.fullscreenQuadVertexBuffer,
@@ -241,10 +331,20 @@ void RenderingShaderManager::CopyResourceMaskAlpha(reshade::api::command_list* c
     device* device = cmd_list->get_device();
     DeviceDataContainer& data = device->get_private_data<DeviceDataContainer>();
 
+    reshade::api::format target_format = device->get_resource_desc(device->get_resource_from_view(rtv_dst)).texture.format;
+    reshade::api::pipeline pipeline = GetOrCompilePipeline(device,
+        device->get_api() == device_api::d3d9 ? SHADER_PREVIEW_COPY_PS_3_0 : SHADER_PREVIEW_COPY_PS_4_0,
+        device->get_api() == device_api::d3d9 ? SHADER_FULLSCREEN_VS_3_0 : SHADER_FULLSCREEN_VS_4_0,
+        data.customShader.alphaPreservingCopyPipeline.pipelineLayout,
+        0x7,
+        target_format,
+        data.customShader.alphaPreservingCopyPipelinesByFormat,
+        data.customShader.pipeline_mutex);
+
     ApplyShader(cmd_list,
                 srv_src,
                 rtv_dst,
-                data.customShader.alphaPreservingCopyPipeline.pipeline,
+                pipeline,
                 data.customShader.alphaPreservingCopyPipeline.pipelineLayout,
                 data.customShader.alphaPreservingCopyPipeline.pipelineSampler,
                 data.customShader.fullscreenQuadVertexBuffer,
@@ -253,3 +353,4 @@ void RenderingShaderManager::CopyResourceMaskAlpha(reshade::api::command_list* c
 
     cmd_list->get_private_data<state_tracking>().apply(cmd_list, true);
 }
+

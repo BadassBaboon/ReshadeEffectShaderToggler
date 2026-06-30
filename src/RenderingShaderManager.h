@@ -1,6 +1,8 @@
 #pragma once
 
 #include "RenderingManager.h"
+#include <unordered_map>
+#include <shared_mutex>
 
 namespace Rendering {
 class __declspec(novtable) RenderingShaderManager final {
@@ -48,6 +50,15 @@ class __declspec(novtable) RenderingShaderManager final {
                      reshade::api::resource& quad,
                      uint32_t width,
                      uint32_t height);
+                     
+    reshade::api::pipeline GetOrCompilePipeline(reshade::api::device* device,
+                                                uint16_t ps_resource_id,
+                                                uint16_t vs_resource_id,
+                                                reshade::api::pipeline_layout sh_layout,
+                                                uint8_t write_mask,
+                                                reshade::api::format target_format,
+                                                std::unordered_map<reshade::api::format, reshade::api::pipeline>& cache,
+                                                std::shared_mutex& mutex);
 
     AddonImGui::AddonUIData& uiData;
     ResourceManager& resourceManager;
