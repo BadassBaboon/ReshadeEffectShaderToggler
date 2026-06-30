@@ -162,9 +162,25 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
                 const resource res2[2] = { rs, previewResPing };
                 const resource_usage before[2] = { rs_usage, SR };
                 const resource_usage during[2] = { CS, CD };
-                if (strict_copy) cmd_list->barrier(2, res2, before, during);
+                
+                std::vector<reshade::api::resource_view> bound_rtvs;
+                reshade::api::resource_view bound_dsv = {0};
+
+                if (strict_copy) {
+                    bound_rtvs = cmd_list->get_private_data<state_tracking>().render_targets;
+                    bound_dsv = cmd_list->get_private_data<state_tracking>().depth_stencil;
+                    // Unbind render targets so we can safely transition them without DX12 validation errors
+                    cmd_list->bind_render_targets_and_depth_stencil(0, nullptr, { 0 });
+                    cmd_list->barrier(2, res2, before, during);
+                }
+                
                 cmd_list->copy_resource(rs, previewResPing);
-                if (strict_copy) cmd_list->barrier(2, res2, during, before); // src back to rs_usage, ping back to SR
+                
+                if (strict_copy) {
+                    cmd_list->barrier(2, res2, during, before); // src back to rs_usage, ping back to SR
+                    // Rebind
+                    cmd_list->bind_render_targets_and_depth_stencil(static_cast<uint32_t>(bound_rtvs.size()), bound_rtvs.data(), bound_dsv);
+                }
 
                 // pong: shader_resource -> render_target for the copy-shader output, then back.
                 resource_usage pong_from = SR, pong_to = RT;

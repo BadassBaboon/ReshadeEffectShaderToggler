@@ -187,7 +187,12 @@ void ToggleGroupResourceManager::CheckGroupBuffers(reshade::api::effect_runtime*
                 uint32_t buffer_height = desc.texture.height;
 
                 if (static_cast<GroupResourceType>(i) == GroupResourceType::RESOURCE_INTERMEDIATE_FULLRES) {
-                    runtime->get_screenshot_width_and_height(&buffer_width, &buffer_height);
+                    uint32_t sw = 0, sh = 0;
+                    runtime->get_screenshot_width_and_height(&sw, &sh);
+                    if (sw != 0 && sh != 0) {
+                        buffer_width = sw;
+                        buffer_height = sh;
+                    }
                 }
 
                 resource_desc group_desc =
