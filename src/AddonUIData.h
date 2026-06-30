@@ -40,7 +40,7 @@
 #include <reshade.hpp>
 #include <unordered_map>
 
-constexpr auto FRAMECOUNT_COLLECTION_PHASE_DEFAULT = 10;
+constexpr auto FRAMECOUNT_COLLECTION_PHASE_DEFAULT = 60;
 constexpr auto HASH_FILE_NAME = "ReshadeEffectShaderToggler.ini";
 
 namespace AddonImGui {
