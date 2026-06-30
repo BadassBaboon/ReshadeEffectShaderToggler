@@ -137,7 +137,35 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
             // create, so group_res == 0 above.)
             const bool source_copyable = desc.texture.samples <= 1 && desc.type == resource_type::texture_2d;
             if (group_res != 0 && compatible && source_copyable) {
+                const bool strict_copy = (runtime->get_device()->get_api() == reshade::api::device_api::d3d12 || runtime->get_device()->get_api() == reshade::api::device_api::vulkan);
+
+                std::vector<reshade::api::resource_view> bound_rtvs;
+                reshade::api::resource_view bound_dsv = { 0 };
+
+                if (strict_copy) {
+                    bound_rtvs = cmd_list->get_private_data<state_tracking>().render_targets;
+                    bound_dsv = cmd_list->get_private_data<state_tracking>().depth_stencil;
+                    // Unbind render targets so we can safely transition them without DX12 validation errors
+                    cmd_list->bind_render_targets_and_depth_stencil(0, nullptr, { 0 });
+
+                    const reshade::api::resource res2[2] = { active_resource.resource, group_res };
+                    const reshade::api::resource_usage before[2] = { reshade::api::resource_usage::render_target, reshade::api::resource_usage::shader_resource };
+                    const reshade::api::resource_usage during[2] = { reshade::api::resource_usage::copy_source, reshade::api::resource_usage::copy_dest };
+                    cmd_list->barrier(2, res2, before, during);
+                }
+
                 cmd_list->copy_resource(active_resource.resource, group_res);
+
+                if (strict_copy) {
+                    const reshade::api::resource res2[2] = { active_resource.resource, group_res };
+                    const reshade::api::resource_usage before[2] = { reshade::api::resource_usage::render_target, reshade::api::resource_usage::shader_resource };
+                    const reshade::api::resource_usage during[2] = { reshade::api::resource_usage::copy_source, reshade::api::resource_usage::copy_dest };
+                    cmd_list->barrier(2, res2, during, before); // transition back
+
+                    // Rebind
+                    cmd_list->bind_render_targets_and_depth_stencil(static_cast<uint32_t>(bound_rtvs.size()), bound_rtvs.data(), bound_dsv);
+                }
+                
                 copyPreserveAlpha = true;
             } else {
                 view_non_srgb = view->rtv;

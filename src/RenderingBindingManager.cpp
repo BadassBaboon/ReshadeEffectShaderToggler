@@ -237,7 +237,21 @@ void RenderingBindingManager::_UpdateTextureBindings(command_list* cmd_list,
                                             bind_typeless == reshade::api::format::b8g8r8a8_typeless);
 
                 if (retUpdate && target_res != 0 && bind_copyable) {
+                    if (strict_bind) {
+                        const reshade::api::resource res2[2] = { bindingData.resource, target_res };
+                        const reshade::api::resource_usage before[2] = { reshade::api::resource_usage::shader_resource, reshade::api::resource_usage::shader_resource };
+                        const reshade::api::resource_usage during[2] = { reshade::api::resource_usage::copy_source, reshade::api::resource_usage::copy_dest };
+                        cmd_list->barrier(2, res2, before, during);
+                    }
+
                     cmd_list->copy_resource(bindingData.resource, target_res);
+
+                    if (strict_bind) {
+                        const reshade::api::resource res2[2] = { bindingData.resource, target_res };
+                        const reshade::api::resource_usage before[2] = { reshade::api::resource_usage::shader_resource, reshade::api::resource_usage::shader_resource };
+                        const reshade::api::resource_usage during[2] = { reshade::api::resource_usage::copy_source, reshade::api::resource_usage::copy_dest };
+                        cmd_list->barrier(2, res2, during, before); // transition back
+                    }
 
                     if (group->getFlipBufferBinding() && bindingResource.rtv != 0 && runtimeData.specialEffects[REST_FLIP].technique != 0) {
                         deviceData.current_runtime->render_technique(
