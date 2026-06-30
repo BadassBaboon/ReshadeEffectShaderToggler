@@ -198,7 +198,7 @@ void ToggleGroupResourceManager::CheckGroupBuffers(reshade::api::effect_runtime*
                 resource_desc group_desc =
                   resource_desc(buffer_width, buffer_height, 1, 1, format_to_typeless(desc.texture.format), 1, memory_heap::gpu_only, res_usage);
 
-                if (!runtime->get_device()->create_resource(group_desc, nullptr, resource_usage::copy_dest, &resources.res)) {
+                if (!runtime->get_device()->create_resource(group_desc, nullptr, resource_usage::shader_resource, &resources.res)) {
                     reshade::log::message(reshade::log::level::error, "Failed to create group render target!");
                 }
 
