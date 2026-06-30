@@ -59,7 +59,7 @@ ToggleGroup::ToggleGroup(string name, int id) {
     _rtCycle = CYCLE_NONE;
 
     _group_buffers[static_cast<uint32_t>(GroupResourceType::RESOURCE_ALPHA)] = {
-        {}, {}, {}, {}, {}, {}, {}, [&]() { return _preserveAlpha; }, [&]() { return false; }, GroupResourceState::RESOURCE_INVALID, true
+        {}, {}, {}, {}, {}, {}, {}, [&]() { return true; }, [&]() { return false; }, GroupResourceState::RESOURCE_INVALID, true
     };
     _group_buffers[static_cast<uint32_t>(GroupResourceType::RESOURCE_BINDING)] = { {},
                                                                                    {},
@@ -74,6 +74,9 @@ ToggleGroup::ToggleGroup(string name, int id) {
                                                                                    true };
     _group_buffers[static_cast<uint32_t>(GroupResourceType::RESOURCE_CONSTANTS_COPY)] = {
         {}, {}, {}, {}, {}, {}, {}, [&]() { return _extractConstants; }, [&]() { return false; }, GroupResourceState::RESOURCE_INVALID, true
+    };
+    _group_buffers[static_cast<uint32_t>(GroupResourceType::RESOURCE_INTERMEDIATE_FULLRES)] = {
+        {}, {}, {}, {}, {}, {}, {}, [&]() { return true; }, [&]() { return false; }, GroupResourceState::RESOURCE_INVALID, true
     };
 }
 

@@ -15,7 +15,7 @@ bool state_tracking::track_descriptors = true;
 void state_block::apply_descriptors_dx12_vulkan(command_list* cmd_list) const {
     uint32_t shader_stages_set = 0;
     for (uint32_t stageIdx = 0; stageIdx < ALL_SHADER_STAGES_SIZE; stageIdx++) {
-        auto& descriptor_data = *cmd_list->get_device()->get_private_data<descriptor_tracking>();
+        auto& descriptor_data = cmd_list->get_device()->get_private_data<descriptor_tracking>();
         const auto& [pipelinelayout, root_table] = root_tables[stageIdx];
         shader_stage stages = root_table_stages[stageIdx];
 
@@ -53,7 +53,7 @@ void state_block::apply_descriptors_dx12_vulkan(command_list* cmd_list) const {
 }
 
 void state_block::apply_descriptors(command_list* cmd_list) const {
-    auto& [desc_layout, descriptors] = cmd_list->get_private_data<state_tracking>()->root_tables[0];
+    auto& [desc_layout, descriptors] = cmd_list->get_private_data<state_tracking>().root_tables[0];
     const size_t it = std::min(static_cast<size_t>(2), descriptors.size());
 
     for (uint32_t i = 0; i < it; i++) {
@@ -231,26 +231,26 @@ static inline int32_t get_pipeline_stage_index(pipeline_stage stages) {
 static void on_init_command_list(command_list* cmd_list) {
     cmd_list->create_private_data<state_tracking>();
 
-    auto& deviceState = *cmd_list->get_device()->get_private_data<DeviceStateTracking>();
+    auto& deviceState = cmd_list->get_device()->get_private_data<DeviceStateTracking>();
     std::unique_lock<std::shared_mutex> lock(deviceState.cmd_list_mutex);
     deviceState.cmd_lists.emplace(cmd_list);
 }
 static void on_destroy_command_list(command_list* cmd_list) {
     cmd_list->destroy_private_data<state_tracking>();
 
-    auto& deviceState = *cmd_list->get_device()->get_private_data<DeviceStateTracking>();
+    auto& deviceState = cmd_list->get_device()->get_private_data<DeviceStateTracking>();
     std::unique_lock<std::shared_mutex> lock(deviceState.cmd_list_mutex);
     deviceState.cmd_lists.erase(cmd_list);
 }
 
 static void on_bind_render_targets_and_depth_stencil(command_list* cmd_list, uint32_t count, const resource_view* rtvs, resource_view dsv) {
-    auto& state = *cmd_list->get_private_data<state_tracking>();
+    auto& state = cmd_list->get_private_data<state_tracking>();
     state.render_targets.assign(rtvs, rtvs + count);
     state.depth_stencil = dsv;
 }
 
 static void on_bind_pipeline(command_list* cmd_list, pipeline_stage stages, pipeline pipeline) {
-    auto& state = *cmd_list->get_private_data<state_tracking>();
+    auto& state = cmd_list->get_private_data<state_tracking>();
 
     uint32_t idx = get_pipeline_stage_index(stages);
 
@@ -259,11 +259,11 @@ static void on_bind_pipeline(command_list* cmd_list, pipeline_stage stages, pipe
 }
 
 static void on_destroy_pipeline(device* device, pipeline pipeline) {
-    auto& deviceState = *device->get_private_data<DeviceStateTracking>();
+    auto& deviceState = device->get_private_data<DeviceStateTracking>();
     std::shared_lock<std::shared_mutex> lock(deviceState.cmd_list_mutex);
 
     for (const auto& cmd_list : deviceState.cmd_lists) {
-        auto& state = *cmd_list->get_private_data<state_tracking>();
+        auto& state = cmd_list->get_private_data<state_tracking>();
 
         for (uint32_t s = 0; s < ALL_PIPELINE_STAGES_SIZE; s++) {
             if (state.current_pipeline[s] == pipeline) {
@@ -276,12 +276,12 @@ static void on_destroy_pipeline(device* device, pipeline pipeline) {
 
 // static void on_destroy_resource_view(device* device, resource_view view)
 //{
-//     auto& deviceState = *device->get_private_data<DeviceStateTracking>();
+//     auto& deviceState = device->get_private_data<DeviceStateTracking>();
 //     std::shared_lock<std::shared_mutex> lock(deviceState.cmd_list_mutex);
 //
 //     for (auto& cmd_list : deviceState.cmd_lists)
 //     {
-//         auto& state = *cmd_list->get_private_data<state_tracking>();
+//         auto& state = cmd_list->get_private_data<state_tracking>();
 //
 //         for (uint32_t s = 0; s < state.render_targets.size(); s++)
 //         {
@@ -294,7 +294,7 @@ static void on_destroy_pipeline(device* device, pipeline pipeline) {
 // }
 
 static void on_bind_pipeline_states(command_list* cmd_list, uint32_t count, const dynamic_state* states, const uint32_t* values) {
-    auto& state = *cmd_list->get_private_data<state_tracking>();
+    auto& state = cmd_list->get_private_data<state_tracking>();
 
     for (uint32_t i = 0; i < count; ++i) {
         switch (states[i]) {
@@ -318,7 +318,7 @@ static void on_bind_pipeline_states(command_list* cmd_list, uint32_t count, cons
 }
 
 static void on_bind_viewports(command_list* cmd_list, uint32_t first, uint32_t count, const viewport* viewports) {
-    auto& state = *cmd_list->get_private_data<state_tracking>();
+    auto& state = cmd_list->get_private_data<state_tracking>();
 
     if (state.viewports.size() < (first + count))
         state.viewports.resize(first + count);
@@ -328,7 +328,7 @@ static void on_bind_viewports(command_list* cmd_list, uint32_t first, uint32_t c
 }
 
 static void on_bind_scissor_rects(command_list* cmd_list, uint32_t first, uint32_t count, const rect* rects) {
-    auto& state = *cmd_list->get_private_data<state_tracking>();
+    auto& state = cmd_list->get_private_data<state_tracking>();
 
     if (state.scissor_rects.size() < (first + count))
         state.scissor_rects.resize(first + count);
@@ -348,8 +348,8 @@ static void on_bind_descriptor_tables(command_list* cmd_list,
     if (idx < 0)
         return;
 
-    auto& state_tracker = *cmd_list->get_private_data<state_tracking>();
-    const auto& descriptor_state = *cmd_list->get_device()->get_private_data<descriptor_tracking>();
+    auto& state_tracker = cmd_list->get_private_data<state_tracking>();
+    const auto& descriptor_state = cmd_list->get_device()->get_private_data<descriptor_tracking>();
     auto& [desc_layout, root_table] = state_tracker.root_tables[idx];
     auto& state_stages = state_tracker.root_table_stages[idx];
     auto& descriptor_buffer = state_tracker.descriptor_buffer[idx];
@@ -411,7 +411,7 @@ static void on_bind_descriptor_tables_no_track(command_list* cmd_list,
     if (idx < 0)
         return;
 
-    auto& state_tracker = *cmd_list->get_private_data<state_tracking>();
+    auto& state_tracker = cmd_list->get_private_data<state_tracking>();
     auto& [desc_layout, root_table] = state_tracker.root_tables[idx];
     auto& state_stages = state_tracker.root_table_stages[idx];
     auto& constant_buffer = state_tracker.constant_buffer[idx];
@@ -470,7 +470,7 @@ static void on_push_descriptors(command_list* cmd_list,
     if (idx < 0)
         return;
 
-    auto& state_tracker = *cmd_list->get_private_data<state_tracking>();
+    auto& state_tracker = cmd_list->get_private_data<state_tracking>();
     auto& [desc_layout, root_table] = state_tracker.root_tables[idx];
     auto& state_stages = state_tracker.root_table_stages[idx];
     auto& descriptor_buffer = state_tracker.descriptor_buffer[idx];
@@ -515,7 +515,7 @@ static void on_push_constants(command_list* cmd_list,
     if (idx < 0)
         return;
 
-    auto& state_tracker = *cmd_list->get_private_data<state_tracking>();
+    auto& state_tracker = cmd_list->get_private_data<state_tracking>();
     auto& [desc_layout, root_table] = state_tracker.root_tables[idx];
     auto& state_stages = state_tracker.root_table_stages[idx];
     auto& constant_buffer = state_tracker.constant_buffer[idx];
@@ -601,13 +601,13 @@ const std::vector<uint32_t>* state_block::get_constants_at(uint32_t stageIndex, 
 }
 
 static void on_reset_command_list(command_list* cmd_list) {
-    auto& state = *cmd_list->get_private_data<state_tracking>();
+    auto& state = cmd_list->get_private_data<state_tracking>();
     state.clear();
 }
 
 static void on_reshade_present(effect_runtime* runtime) {
     if (runtime->get_device()->get_api() != device_api::d3d12 && runtime->get_device()->get_api() != device_api::vulkan) {
-        auto& state = *runtime->get_command_queue()->get_immediate_command_list()->get_private_data<state_tracking>();
+        auto& state = runtime->get_command_queue()->get_immediate_command_list()->get_private_data<state_tracking>();
         state.clear_present(runtime);
     }
 }
@@ -640,7 +640,7 @@ reshade::api::resource_usage state_block::stop_resource_barrier_tracking(reshade
 }
 
 static void on_barrier(command_list* cmd_list, uint32_t count, const resource* resources, const resource_usage* old_states, const resource_usage* new_states) {
-    auto& barrier_track = cmd_list->get_private_data<state_tracking>()->resource_barrier_track;
+    auto& barrier_track = cmd_list->get_private_data<state_tracking>().resource_barrier_track;
     if (barrier_track.size() > 0) {
         for (uint32_t i = 0; i < count; i++) {
             const auto& restrack = barrier_track.find(resources[i].handle);

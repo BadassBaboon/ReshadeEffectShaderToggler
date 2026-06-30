@@ -46,7 +46,7 @@ void ResourceManager::Init() {
 void ResourceManager::InitBackbuffer(swapchain* runtime) {
     // Create backbuffer resource views
     device* dev = runtime->get_device();
-    DeviceDataContainer& data = *dev->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = dev->get_private_data<DeviceDataContainer>();
 
     resource_desc desc = dev->get_resource_desc(runtime->get_back_buffer(0));
 
@@ -64,7 +64,7 @@ void ResourceManager::InitBackbuffer(swapchain* runtime) {
 
 void ResourceManager::ClearBackbuffer(reshade::api::swapchain* runtime) {
     device* dev = runtime->get_device();
-    DeviceDataContainer& data = *dev->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = dev->get_private_data<DeviceDataContainer>();
 
     uint32_t count = runtime->get_back_buffer_count();
 
@@ -83,11 +83,11 @@ bool ResourceManager::OnCreateSwapchain(reshade::api::swapchain_desc& desc, void
     return false;
 }
 
-void ResourceManager::OnInitSwapchain(reshade::api::swapchain* swapchain, bool resize) {
+void ResourceManager::OnInitSwapchain(reshade::api::swapchain* swapchain) {
     InitBackbuffer(swapchain);
 }
 
-void ResourceManager::OnDestroySwapchain(reshade::api::swapchain* swapchain, bool resize) {
+void ResourceManager::OnDestroySwapchain(reshade::api::swapchain* swapchain) {
     OnDestroyDevice(swapchain->get_device(), true);
     ClearBackbuffer(swapchain);
 }
@@ -113,7 +113,7 @@ void ResourceManager::OnInitResource(device* device,
                                      const subresource_data* initData,
                                      resource_usage usage,
                                      reshade::api::resource handle) {
-    auto& data = *device->get_private_data<DeviceDataContainer>();
+    auto& data = device->get_private_data<DeviceDataContainer>();
 
     if (rShim != nullptr) {
         rShim->OnInitResource(device, desc, initData, usage, handle);
@@ -197,7 +197,7 @@ void ResourceManager::DisposePreview(reshade::api::device* device) {
         return;
     }
 
-    DeviceDataContainer& data = *device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = device->get_private_data<DeviceDataContainer>();
 
     if (data.resourceManagerData.preview_res[0] == 0 && data.resourceManagerData.preview_res[1] == 0)
         return;
@@ -256,7 +256,7 @@ void ResourceManager::CheckPreview(reshade::api::command_list* cmd_list, reshade
         return;
     }
 
-    DeviceDataContainer& deviceData = *device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
 
     if (deviceData.huntPreview.recreate_preview) {
         DisposePreview(device);
@@ -315,7 +315,7 @@ void ResourceManager::SetPingPreviewHandles(reshade::api::device* device,
                                             reshade::api::resource* res,
                                             reshade::api::resource_view* rtv,
                                             reshade::api::resource_view* srv) {
-    DeviceDataContainer& deviceData = *device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
 
     if (deviceData.resourceManagerData.preview_res[0] != 0) {
         if (res != nullptr)
@@ -331,7 +331,7 @@ void ResourceManager::SetPongPreviewHandles(reshade::api::device* device,
                                             reshade::api::resource* res,
                                             reshade::api::resource_view* rtv,
                                             reshade::api::resource_view* srv) {
-    DeviceDataContainer& deviceData = *device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
 
     if (deviceData.resourceManagerData.preview_res[1] != 0) {
         if (res != nullptr)
@@ -344,7 +344,7 @@ void ResourceManager::SetPongPreviewHandles(reshade::api::device* device,
 }
 
 bool ResourceManager::IsCompatibleWithPreviewFormat(reshade::api::device* device, reshade::api::resource res, reshade::api::format view_format) {
-    DeviceDataContainer& deviceData = *device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
 
     if (deviceData.resourceManagerData.preview_res[0] == 0 || res == 0)
         return false;

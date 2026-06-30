@@ -108,7 +108,7 @@ struct __declspec(novtable) SpecialEffect final {
     reshade::api::effect_technique technique;
 };
 
-enum SpecialEffects : uint32_t { REST_TONEMAP_TO_SDR = 0, REST_TONEMAP_TO_HDR, REST_FLIP, REST_NOOP, REST_EFFECTS_COUNT };
+enum SpecialEffects : uint32_t { REST_TONEMAP_TO_SDR = 0, REST_TONEMAP_TO_HDR, REST_FLIP, REST_NOOP, REST_SCALE, REST_EFFECTS_COUNT };
 
 struct __declspec(novtable) CustomShaderInstance final {
     reshade::api::pipeline pipeline = { 0 };
@@ -158,11 +158,12 @@ struct __declspec(uuid("838BAF1D-95C0-4A7E-A517-052642879986")) RuntimeDataConta
     std::unordered_set<EffectData*> allEnabledTechniques;
     std::vector<EffectData*> allSortedTechniques;
 
-    SpecialEffect specialEffects[4] = {
+    SpecialEffect specialEffects[5] = {
         SpecialEffect{ "REST_TONEMAP_TO_SDR", reshade::api::effect_technique{ 0 } },
         SpecialEffect{ "REST_TONEMAP_TO_HDR", reshade::api::effect_technique{ 0 } },
         SpecialEffect{ "REST_FLIP", reshade::api::effect_technique{ 0 } },
         SpecialEffect{ "REST_NOOP", reshade::api::effect_technique{ 0 } },
+        SpecialEffect{ "REST_SCALE", reshade::api::effect_technique{ 0 } },
     };
     int32_t previousEnableCount = 0;
 };

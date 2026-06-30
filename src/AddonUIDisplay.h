@@ -97,7 +97,7 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
         return;
     }
 
-    RuntimeDataContainer& runtimeData = *runtime->get_private_data<RuntimeDataContainer>();
+    RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
 
     std::unordered_set<std::string> curTechniques = group->preferredTechniques();
     std::unordered_set<std::string> newTechniques;
@@ -214,7 +214,7 @@ static void DisplayPreview(AddonImGui::AddonUIData& instance,
     if (ImGui::BeginChild("RTPreview##child", { width, 0 }, true, ImGuiWindowFlags_None)) {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
 
-        DeviceDataContainer& deviceData = *runtime->get_device()->get_private_data<DeviceDataContainer>();
+        DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
         reshade::api::resource_view srv = reshade::api::resource_view{ 0 };
         resManager.SetPongPreviewHandles(runtime->get_device(), nullptr, nullptr, &srv);
         bool clearAlpha = group->getClearPreviewAlpha();
@@ -254,7 +254,7 @@ static void DisplayBindingPreview(AddonImGui::AddonUIData& instance,
     if (ImGui::BeginChild("BindingPreview##child", { 0, 0 }, true, ImGuiWindowFlags_None)) {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
 
-        DeviceDataContainer& deviceData = *runtime->get_device()->get_private_data<DeviceDataContainer>();
+        DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
         ShaderToggler::GroupResource& groupResource = group->GetGroupResource(ShaderToggler::GroupResourceType::RESOURCE_BINDING);
 
         reshade::api::resource_view res_view = { 0 };
@@ -588,7 +588,7 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
     const char* typeItems[] = { "Render target", "Shader Resource View" };
     uint32_t selectedIndex = group->getExtractResourceViews() ? 1 : 0;
     const char* typeSelectedItem = typeItems[selectedIndex];
-    DeviceDataContainer& deviceData = *runtime->get_device()->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
 
     static const char* swapchainMatchOptions[] = { "RESOLUTION", "ASPECT RATIO", "EXTENDED ASPECT RATIO", "NONE" };
     uint32_t selectedSwapchainMatchMode = group->getBindingMatchSwapchainResolution();

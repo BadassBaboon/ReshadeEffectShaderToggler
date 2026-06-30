@@ -98,7 +98,7 @@ void RenderingShaderManager::InitShader(reshade::api::device* device,
 }
 
 void RenderingShaderManager::InitShaders(reshade::api::device* device) {
-    DeviceDataContainer& shader = *device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& shader = device->get_private_data<DeviceDataContainer>();
 
     if (device->get_api() == device_api::d3d9) {
         InitShader(device,
@@ -138,7 +138,7 @@ void RenderingShaderManager::InitShaders(reshade::api::device* device) {
 }
 
 void RenderingShaderManager::DestroyShaders(reshade::api::device* device) {
-    DeviceDataContainer& shader = *device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& shader = device->get_private_data<DeviceDataContainer>();
 
     if (shader.customShader.fullscreenQuadVertexBuffer != 0) {
         device->destroy_resource(shader.customShader.fullscreenQuadVertexBuffer);
@@ -192,7 +192,7 @@ void RenderingShaderManager::ApplyShader(command_list* cmd_list,
         return;
     }
 
-    cmd_list->get_private_data<state_tracking>()->capture(cmd_list, true);
+    cmd_list->get_private_data<state_tracking>().capture(cmd_list, true);
 
     cmd_list->bind_render_targets_and_depth_stencil(1, &rtv_dst);
 
@@ -218,7 +218,7 @@ void RenderingShaderManager::ApplyShader(command_list* cmd_list,
 
 void RenderingShaderManager::CopyResource(command_list* cmd_list, resource_view srv_src, resource_view rtv_dst, uint32_t width, uint32_t height) {
     device* device = cmd_list->get_device();
-    DeviceDataContainer& data = *device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = device->get_private_data<DeviceDataContainer>();
 
     ApplyShader(cmd_list,
                 srv_src,
@@ -230,7 +230,7 @@ void RenderingShaderManager::CopyResource(command_list* cmd_list, resource_view 
                 width,
                 height);
 
-    cmd_list->get_private_data<state_tracking>()->apply(cmd_list, true);
+    cmd_list->get_private_data<state_tracking>().apply(cmd_list, true);
 }
 
 void RenderingShaderManager::CopyResourceMaskAlpha(reshade::api::command_list* cmd_list,
@@ -239,7 +239,7 @@ void RenderingShaderManager::CopyResourceMaskAlpha(reshade::api::command_list* c
                                                    uint32_t width,
                                                    uint32_t height) {
     device* device = cmd_list->get_device();
-    DeviceDataContainer& data = *device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = device->get_private_data<DeviceDataContainer>();
 
     ApplyShader(cmd_list,
                 srv_src,
@@ -251,5 +251,5 @@ void RenderingShaderManager::CopyResourceMaskAlpha(reshade::api::command_list* c
                 width,
                 height);
 
-    cmd_list->get_private_data<state_tracking>()->apply(cmd_list, true);
+    cmd_list->get_private_data<state_tracking>().apply(cmd_list, true);
 }

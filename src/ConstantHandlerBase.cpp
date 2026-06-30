@@ -128,7 +128,7 @@ bool ConstantHandlerBase::UpdateConstantBufferEntries(command_list* cmd_list,
                                                       DeviceDataContainer& devData,
                                                       ToggleGroup* group,
                                                       uint32_t index) {
-    state_tracking& state = *cmd_list->get_private_data<state_tracking>();
+    state_tracking& state = cmd_list->get_private_data<state_tracking>();
     index = std::min(static_cast<uint32_t>(2), index);
 
     int32_t slot_size = static_cast<int32_t>(state.get_root_table_size_at(index));
@@ -186,7 +186,7 @@ bool ConstantHandlerBase::UpdateConstantEntries(command_list* cmd_list,
                                                 DeviceDataContainer& devData,
                                                 ToggleGroup* group,
                                                 uint32_t index) {
-    state_tracking& state = *cmd_list->get_private_data<state_tracking>();
+    state_tracking& state = cmd_list->get_private_data<state_tracking>();
     index = std::min(static_cast<uint32_t>(2), index);
 
     // const auto& [_, current_constants] = state.push_constants[index];
@@ -221,8 +221,8 @@ void ConstantHandlerBase::UpdateConstants(command_list* cmd_list) {
     }
 
     device* device = cmd_list->get_device();
-    CommandListDataContainer& commandListData = *cmd_list->get_private_data<CommandListDataContainer>();
-    DeviceDataContainer& deviceData = *device->get_private_data<DeviceDataContainer>();
+    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
 
     if (deviceData.current_runtime == nullptr ||
         (commandListData.ps.constantBuffersToUpdate.size() == 0 && commandListData.vs.constantBuffersToUpdate.size() == 0 &&

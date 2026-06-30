@@ -25,8 +25,8 @@ bool RenderingEffectManager::RenderRemainingEffects(effect_runtime* runtime) {
 
     command_list* cmd_list = runtime->get_command_queue()->get_immediate_command_list();
     device* device = runtime->get_device();
-    RuntimeDataContainer& runtimeData = *runtime->get_private_data<RuntimeDataContainer>();
-    DeviceDataContainer& deviceData = *device->get_private_data<DeviceDataContainer>();
+    RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
+    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
     bool rendered = false;
 
     resource res = runtime->get_current_back_buffer();
@@ -59,7 +59,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                                             vector<EffectData*>& removalList,
                                             const unordered_set<EffectData*>& toRenderNames) {
     bool rendered = false;
-    CommandListDataContainer& cmdData = *cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& cmdData = cmd_list->get_private_data<CommandListDataContainer>();
     effect_runtime* runtime = deviceData.current_runtime;
 
     unordered_map<ToggleGroup*, pair<vector<EffectData*>, ResourceRenderData>> groupTechMap;
@@ -169,14 +169,51 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
             runtime->render_technique(runtimeData.specialEffects[REST_TONEMAP_TO_SDR].technique, cmd_list, view_non_srgb, view_srgb);
         }
 
+        bool scaledOffsize = false;
+        resource_view original_view_non_srgb = view_non_srgb;
+        resource_view original_view_srgb = view_srgb;
+
+        uint32_t eff_w = 0, eff_h = 0;
+        runtime->get_screenshot_width_and_height(&eff_w, &eff_h);
+
+        // If target is off-size compared to the ReShade effect resolution (swapchain), upscale it to an intermediate buffer
+        if (copyPreserveAlpha && eff_w != 0 && eff_h != 0 && (desc.texture.width != eff_w || desc.texture.height != eff_h)) {
+            resource intermediate_res = {};
+            resource_view intermediate_rtv = {};
+            resource_view intermediate_rtv_srgb = {};
+            
+            groupResourceManager.SetGroupBufferHandles(group, GroupResourceType::RESOURCE_INTERMEDIATE_FULLRES, &intermediate_res, &intermediate_rtv, &intermediate_rtv_srgb, nullptr);
+
+            if (intermediate_res != 0 && runtimeData.specialEffects[REST_SCALE].technique != 0) {
+                // Upscale from the off-size alpha preservation buffer into the full-size intermediate buffer
+                runtime->update_texture_bindings("REST_SCALE_SOURCE", group_view, group_view);
+                runtime->render_technique(runtimeData.specialEffects[REST_SCALE].technique, cmd_list, intermediate_rtv, intermediate_rtv_srgb);
+                
+                // Point view_non_srgb to the full-size intermediate buffer so effects render there
+                view_non_srgb = intermediate_rtv;
+                view_srgb = intermediate_rtv_srgb;
+                scaledOffsize = true;
+            }
+        }
+
         for (const auto& effectTech : effectList) {
             runtime->render_technique(effectTech->technique, cmd_list, view_non_srgb, view_srgb);
 
             effectTech->rendered = true;
-
             removalList.push_back(effectTech);
-
             rendered = true;
+        }
+
+        if (scaledOffsize) {
+            // Downscale back from the intermediate buffer to the original off-size view
+            resource_view intermediate_srv = group->GetGroupResource(GroupResourceType::RESOURCE_INTERMEDIATE_FULLRES).srv;
+            
+            runtime->update_texture_bindings("REST_SCALE_SOURCE", intermediate_srv, intermediate_srv);
+            runtime->render_technique(runtimeData.specialEffects[REST_SCALE].technique, cmd_list, original_view_non_srgb, original_view_srgb);
+            
+            // Restore views
+            view_non_srgb = original_view_non_srgb;
+            view_srgb = original_view_srgb;
         }
 
         if (group->getToneMap() && runtimeData.specialEffects[REST_TONEMAP_TO_HDR].technique != 0) {
@@ -189,8 +226,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
 
         if (copyPreserveAlpha) {
             resource_view target_view_non_srgb = view->rtv;
-            resource_view target_view_srgb = view->rtv_srgb;
-
+            
             if (target_view_non_srgb != 0)
                 shaderManager.CopyResourceMaskAlpha(cmd_list, group_view, target_view_non_srgb, desc.texture.width, desc.texture.height);
         }
@@ -205,8 +241,8 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
     }
 
     device* device = cmd_list->get_device();
-    CommandListDataContainer& commandListData = *cmd_list->get_private_data<CommandListDataContainer>();
-    DeviceDataContainer& deviceData = *device->get_private_data<DeviceDataContainer>();
+    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
 
     // Remove call location from queue
     commandListData.commandQueue &= ~(invocation << (callLocation * MATCH_DELIMITER));
@@ -218,7 +254,7 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
         return;
     }
 
-    RuntimeDataContainer& runtimeData = *deviceData.current_runtime->get_private_data<RuntimeDataContainer>();
+    RuntimeDataContainer& runtimeData = deviceData.current_runtime->get_private_data<RuntimeDataContainer>();
     bool toRender = false;
     unordered_set<EffectData*> psToRenderNames;
     unordered_set<EffectData*> vsToRenderNames;
@@ -275,7 +311,7 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
     }
 
     if (rendered) {
-        cmd_list->get_private_data<state_tracking>()->apply(cmd_list);
+        cmd_list->get_private_data<state_tracking>().apply(cmd_list);
     }
 }
 
@@ -283,8 +319,8 @@ void RenderingEffectManager::PreventRuntimeReload(reshade::api::effect_runtime* 
     if (runtime == nullptr)
         return;
 
-    RuntimeDataContainer& runtimeData = *runtime->get_private_data<RuntimeDataContainer>();
-    DeviceDataContainer& deviceData = *runtime->get_device()->get_private_data<DeviceDataContainer>();
+    RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
+    DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
 
     // cringe
     if (runtimeData.specialEffects[REST_NOOP].technique != 0) {
