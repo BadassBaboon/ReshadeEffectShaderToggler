@@ -35,7 +35,7 @@ void ConstantCopyFFXIV::GetHostConstantBuffer(command_list* cmd_list,
     const auto& ff = _hostResourceBufferMap.find(resourceHandle);
     if (ff != _hostResourceBufferMap.end()) {
         auto& [buffer, bufHandle, bufSize, mapped] = _hostResourceBuffer[ff->second];
-        size_t minSize = std::min(size, bufSize);
+        size_t minSize = std::min(size, static_cast<size_t>(bufSize));
         memcpy(dest.data(), buffer, minSize);
     }
 }
@@ -87,7 +87,7 @@ void ConstantCopyFFXIV::detour_ffxiv_cbload0(uint64_t param_1, uint16_t* param_2
         uVar5 = (uint64_t)((uint32_t)(param_3 >> 0x20) & 3);
         if (iVar4 + 1U < 0xc) {
             auStack_28.pData = pIVar2;
-            uVar5 = detour_ffxiv_cbload1(param_1 + 0x18 + (uVar5 + static_cast<uint64_t>(iVar4 + 1U) * 4) * 0x50,
+            uVar5 = detour_ffxiv_cbload1(static_cast<uintptr_t>(param_1 + 0x18 + (uVar5 + static_cast<uint64_t>(iVar4 + 1U) * 4) * 0x50),
                                          plVar2,
                                          &auStack_28,
                                          reinterpret_cast<ID3D11Resource**>(&local_res8),
@@ -98,7 +98,7 @@ void ConstantCopyFFXIV::detour_ffxiv_cbload0(uint64_t param_1, uint16_t* param_2
             lVar1 = param_1 + uVar5 * 0x10;
             pauVar5 = *(uint64_t**)(lVar1 + 0xf18);
             if (*(void**)(lVar1 + 0xf20) != pIVar2) {
-                set_host_resource_data_location(pIVar2, auStack_28.RowPitch * 16, (int64_t)pauVar5, (uVar5 * 0x10 + 0xf18) / 8);
+                set_host_resource_data_location(pIVar2, static_cast<size_t>(auStack_28.RowPitch) * 16, (int64_t)pauVar5, static_cast<size_t>((uVar5 * 0x10 + 0xf18) / 8));
 
                 plVar2->Map(reinterpret_cast<ID3D11Resource*>(pauVar5), 0, D3D11_MAP::D3D11_MAP_WRITE_DISCARD, 0, &auStack_28);
                 org_ffxiv_memcpy(auStack_28.pData, pIVar2, auStack_28.RowPitch * 16);
@@ -175,7 +175,7 @@ uint64_t __fastcall ConstantCopyFFXIV::detour_ffxiv_cbload1(uintptr_t param_1,
     uVar2 = *reinterpret_cast<ID3D11Resource**>(param_1 + uVar5 * 8);
     *param_4 = uVar2;
 
-    set_host_resource_data_location(param_3->pData, param_3->RowPitch * 16, (int64_t)uVar2, (index + uVar5 * 8) / 8);
+    set_host_resource_data_location(param_3->pData, static_cast<size_t>(param_3->RowPitch) * 16, (int64_t)uVar2, static_cast<size_t>((index + uVar5 * 8) / 8));
 
     param_2->Map(uVar2, 0, D3D11_MAP::D3D11_MAP_WRITE_DISCARD, 0, &apauStack_28);
     org_ffxiv_memcpy(apauStack_28.pData, param_3->pData, param_3->RowPitch * 16);

@@ -114,7 +114,7 @@ static uint32_t calculateShaderHash(void* shaderData) {
     if (shaderDesc.code == nullptr || shaderDesc.code_size == 0) {
         static bool log_once = false;
         if (!log_once) {
-            reshade::log_message(reshade::log_level::error, "ShaderToggler: Encountered shader with nullptr code or size 0.");
+            reshade::log::message(reshade::log::level::error, "ShaderToggler: Encountered shader with nullptr code or size 0.");
             log_once = true;
         }
         return 0;
