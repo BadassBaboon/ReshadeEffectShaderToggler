@@ -34,7 +34,7 @@ void ConstantCopyFFXIV::GetHostConstantBuffer(command_list* cmd_list,
                                               uint64_t resourceHandle) {
     const auto& ff = _hostResourceBufferMap.find(resourceHandle);
     if (ff != _hostResourceBufferMap.end()) {
-        auto& [buffer, bufHandle, bufSize, mapped] = _hostResourceBuffer[ff->second];
+        auto& [buffer, bufHandle, bufSize, mapped] = _hostResourceBuffer[static_cast<size_t>(ff->second)];
         size_t minSize = std::min(size, static_cast<size_t>(bufSize));
         memcpy(dest.data(), buffer, minSize);
     }
@@ -91,7 +91,7 @@ void ConstantCopyFFXIV::detour_ffxiv_cbload0(uint64_t param_1, uint16_t* param_2
                                          plVar2,
                                          &auStack_28,
                                          reinterpret_cast<ID3D11Resource**>(&local_res8),
-                                         0x18 + (uVar5 + static_cast<uint64_t>(iVar4 + 1U) * 4) * 0x50);
+                                         static_cast<uint64_t>(0x18 + (uVar5 + static_cast<uint64_t>(iVar4 + 1U) * 4) * 0x50));
             pauVar5 = local_res8;
             *(uint8_t*)((param_3 & 0xff) + 8 + (int64_t)param_2) = (uint8_t)uVar5;
         } else {
