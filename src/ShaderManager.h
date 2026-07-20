@@ -90,9 +90,15 @@ class ShaderManager {
 
     size_t getPipelineCount() { return _handleToShaderHash.size(); }
     size_t getShaderCount() { return _shaderHashes.size(); }
-    const std::unordered_set<uint32_t>& getCollectedShaderHashes() const { return _collectedActiveShaderHashes; }
+    std::unordered_set<uint32_t> getCollectedShaderHashes() {
+        std::shared_lock lock(_collectedActiveHandlesMutex);
+        return _collectedActiveShaderHashes;
+    }
     void setActivedHuntedShaderIndex(uint32_t index);
-    size_t getAmountShaderHashesCollected() { return _collectedActiveShaderHashes.size(); }
+    size_t getAmountShaderHashesCollected() {
+        std::shared_lock lock(_collectedActiveHandlesMutex);
+        return _collectedActiveShaderHashes.size();
+    }
     bool isInHuntingMode() const { return _isInHuntingMode; }
     uint32_t getActiveHuntedShaderHash() const { return _activeHuntedShaderHash; }
     int getActiveHuntedShaderIndex() const { return _activeHuntedShaderIndex; }
@@ -114,11 +120,11 @@ class ShaderManager {
     }
 
     uint32_t getCollectedShaderHash(uint32_t index) {
+        std::shared_lock lock(_collectedActiveHandlesMutex);
         if (index < 0 || _collectedActiveShaderHashes.size() <= 0 || index >= _collectedActiveShaderHashes.size()) {
             return 0;
         }
 
-        // no lock needed, collecting phase is over
         auto it = _collectedActiveShaderHashes.begin();
         std::advance(it, index);
         return *it;

@@ -110,6 +110,16 @@ static uint32_t calculateShaderHash(void* shaderData) {
     }
 
     const auto shaderDesc = *static_cast<shader_desc*>(shaderData);
+
+    if (shaderDesc.code == nullptr || shaderDesc.code_size == 0) {
+        static bool log_once = false;
+        if (!log_once) {
+            reshade::log_message(reshade::log_level::error, "ShaderToggler: Encountered shader with nullptr code or size 0.");
+            log_once = true;
+        }
+        return 0;
+    }
+
     return compute_crc32(static_cast<const uint8_t*>(shaderDesc.code), shaderDesc.code_size);
 }
 
@@ -393,6 +403,10 @@ static void onBindRenderTargetsAndDepthStencil(command_list* cmd_list, uint32_t 
     CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
     DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
 
+    if (deviceData.current_runtime == nullptr || !deviceData.current_runtime->get_effects_state()) {
+        return;
+    }
+
     // if (count > 0)
     //{
     if (commandListData.commandQueue & Rendering::CHECK_MATCH_BIND_RENDERTARGET_PREVIEW &&
@@ -423,7 +437,7 @@ static void onBeginRenderPass(command_list* cmd_list, uint32_t count, const rend
     CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
     DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
 
-    if (!deviceData.current_runtime->get_effects_state()) {
+    if (deviceData.current_runtime == nullptr || !deviceData.current_runtime->get_effects_state()) {
         return;
     }
 
@@ -533,6 +547,15 @@ static void UnInit() {
 }
 
 static void CheckDrawCall(command_list* cmd_list, const uint64_t match_modifier = Rendering::MATCH_ALL) {
+    if (cmd_list == nullptr || cmd_list->get_device() == nullptr) {
+        return;
+    }
+
+    DeviceDataContainer& deviceData = cmd_list->get_device()->get_private_data<DeviceDataContainer>();
+    if (deviceData.current_runtime == nullptr || !deviceData.current_runtime->get_effects_state()) {
+        return;
+    }
+
     CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
 
     if (commandListData.commandQueue & Rendering::MATCH_ALL & match_modifier) {

@@ -537,7 +537,7 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
         return;
     }
 
-    const std::unordered_set<uint32_t>& hashes = shaderManager->getCollectedShaderHashes();
+    std::unordered_set<uint32_t> hashes = shaderManager->getCollectedShaderHashes();
     static int32_t selected = -1;
     uint32_t index = 0;
     ImGuiStyle style = ImGui::GetStyle();

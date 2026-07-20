@@ -94,13 +94,14 @@ void ShaderManager::stopHuntingMode() {
 }
 
 void ShaderManager::setActiveHuntedShaderHandle() {
+    shared_lock lock(_collectedActiveHandlesMutex);
+
     if (_activeHuntedShaderIndex < 0 || _collectedActiveShaderHashes.size() == 0 ||
         static_cast<size_t>(_activeHuntedShaderIndex) >= _collectedActiveShaderHashes.size()) {
         _activeHuntedShaderHash = 0;
         return;
     }
 
-    // no lock needed, collecting phase is over
     auto it = _collectedActiveShaderHashes.begin();
     std::advance(it, _activeHuntedShaderIndex);
     _activeHuntedShaderHash = *it;
@@ -110,9 +111,12 @@ void ShaderManager::huntNextShader(bool ctrlPressed) {
     if (!_isInHuntingMode) {
         return;
     }
+
+    shared_lock lock(_collectedActiveHandlesMutex);
     if (_collectedActiveShaderHashes.size() == 0) {
         return;
     }
+
     if (ctrlPressed) {
         if (_markedShaderHashes.size() == 0 || (_markedShaderHashes.size() == 1 && _markedShaderHashes.contains(_activeHuntedShaderHash))) {
             // optimization: if the current active shader is part of marked shader hashes and there is
@@ -124,6 +128,9 @@ void ShaderManager::huntNextShader(bool ctrlPressed) {
         // we have marked shaders, find the next one in collected active shader hashes that's part of this set.
         auto it = _collectedActiveShaderHashes.begin();
         int index = _activeHuntedShaderIndex + 1;
+        if (index >= static_cast<int>(_collectedActiveShaderHashes.size())) {
+            index = 0;
+        }
         std::advance(it, index);
         bool foundHash = false;
         uint32_t hash = 0;
@@ -153,6 +160,8 @@ void ShaderManager::huntNextShader(bool ctrlPressed) {
     } else {
         _activeHuntedShaderIndex = 0;
     }
+
+    lock.unlock(); // unlock before calling setActiveHuntedShaderHandle because it also takes the lock
     setActiveHuntedShaderHandle();
 }
 
@@ -160,9 +169,12 @@ void ShaderManager::huntPreviousShader(bool ctrlPressed) {
     if (!_isInHuntingMode) {
         return;
     }
+
+    shared_lock lock(_collectedActiveHandlesMutex);
     if (_collectedActiveShaderHashes.size() == 0) {
         return;
     }
+
     if (ctrlPressed) {
         if (_markedShaderHashes.size() == 0 || (_markedShaderHashes.size() == 1 && _markedShaderHashes.contains(_activeHuntedShaderHash))) {
             // optimization: if the current active shader is part of marked shader hashes and there is
@@ -173,6 +185,9 @@ void ShaderManager::huntPreviousShader(bool ctrlPressed) {
         // we have marked shaders, find the next one in collected active shader hashes that's part of this set.
         auto it = _collectedActiveShaderHashes.begin();
         int32_t index = _activeHuntedShaderIndex - 1;
+        if (index < 0) {
+            index = static_cast<int32_t>(_collectedActiveShaderHashes.size()) - 1;
+        }
         std::advance(it, index);
         bool foundHash = false;
         uint32_t hash = 0;
@@ -203,6 +218,8 @@ void ShaderManager::huntPreviousShader(bool ctrlPressed) {
     } else {
         --_activeHuntedShaderIndex;
     }
+
+    lock.unlock(); // unlock before calling setActiveHuntedShaderHandle because it also takes the lock
     setActiveHuntedShaderHandle();
 }
 
@@ -210,6 +227,8 @@ void ShaderManager::setActivedHuntedShaderIndex(uint32_t index) {
     if (!_isInHuntingMode) {
         return;
     }
+
+    shared_lock lock(_collectedActiveHandlesMutex);
     if (_collectedActiveShaderHashes.size() <= 0) {
         return;
     }
@@ -220,6 +239,7 @@ void ShaderManager::setActivedHuntedShaderIndex(uint32_t index) {
         _activeHuntedShaderIndex = index;
     }
 
+    lock.unlock(); // unlock before calling setActiveHuntedShaderHandle because it also takes the lock
     setActiveHuntedShaderHandle();
 }
 
@@ -261,6 +281,7 @@ void ShaderManager::toggleMarkOnHuntedShader() {
 }
 
 uint32_t ShaderManager::getShaderHash(uint64_t handle) {
+    shared_lock lock(_hashHandlesMutex);
     if (!_handleToShaderHash.contains(handle)) {
         return 0;
     }
