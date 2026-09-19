@@ -37,7 +37,7 @@ struct __declspec(novtable) ShaderData final {
     std::unordered_set<ShaderToggler::ToggleGroup*> constantBuffersToUpdate;
     effect_queue techniquesToRender;
     std::unordered_set<ShaderToggler::ToggleGroup*> srvToUpdate;
-    const std::vector<ShaderToggler::ToggleGroup*>* blockedShaderGroups = nullptr;
+    std::vector<ShaderToggler::ToggleGroup*> blockedShaderGroups;
     uint32_t id = 0;
 
     ShaderData(uint32_t _id)
@@ -49,7 +49,7 @@ struct __declspec(novtable) ShaderData final {
         constantBuffersToUpdate.clear();
         techniquesToRender.clear();
         srvToUpdate.clear();
-        blockedShaderGroups = nullptr;
+        blockedShaderGroups.clear();
     }
 };
 

@@ -25,8 +25,13 @@ void RenderingQueueManager::_CheckCallForCommandList(ShaderData& sData,
     const uint64_t match_const = MATCH_CONST_PS << sData.id;
     const uint64_t match_preview = MATCH_PREVIEW_PS << sData.id;
 
-    if (sData.blockedShaderGroups != nullptr) {
-        for (auto group : *sData.blockedShaderGroups) {
+    if (!sData.blockedShaderGroups.empty()) {
+        for (auto group : sData.blockedShaderGroups) {
+            // The snapshot was taken before the group could be removed in the UI; skip retired entries.
+            if (group->isRetired()) {
+                continue;
+            }
+
             if (group->isActive()) {
                 if (group->getExtractConstants() && !deviceData.constantsUpdated.contains(group)) {
                     if (!sData.constantBuffersToUpdate.contains(group)) {
@@ -115,6 +120,11 @@ void RenderingQueueManager::CheckCallForCommandList(reshade::api::command_list* 
 
     CommandListDataContainer& commandListData = commandList->get_private_data<CommandListDataContainer>();
     DeviceDataContainer& deviceData = commandList->get_device()->get_private_data<DeviceDataContainer>();
+
+    if (deviceData.current_runtime == nullptr) {
+        return;
+    }
+
     RuntimeDataContainer& runtimeData = deviceData.current_runtime->get_private_data<RuntimeDataContainer>();
 
     shared_lock<shared_mutex> t_mutex(runtimeData.technique_mutex);

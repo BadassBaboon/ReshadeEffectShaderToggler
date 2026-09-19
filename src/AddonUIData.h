@@ -38,6 +38,7 @@
 #include "ToggleGroup.h"
 #include <filesystem>
 #include <reshade.hpp>
+#include <shared_mutex>
 #include <unordered_map>
 
 constexpr auto FRAMECOUNT_COLLECTION_PHASE_DEFAULT = 60;
@@ -96,9 +97,17 @@ class AddonUIData {
     std::atomic_int _toggleGroupIdEffectEditing = -1;
     std::atomic_int _toggleGroupIdConstantEditing = -1;
     std::unordered_map<int, ShaderToggler::ToggleGroup> _toggleGroups;
+    // Groups removed on the UI thread are moved here (via node handles, so the ToggleGroup objects keep
+    // their addresses) instead of being destroyed. Render threads may still hold raw ToggleGroup* in
+    // their per-command-list queues / caches, and destroying a group mid-frame is a use-after-free.
+    // Retired groups are only actually destroyed at device/runtime teardown, when no render thread can
+    // reference them anymore.
+    std::unordered_map<int, ShaderToggler::ToggleGroup> _retiredToggleGroups;
     std::unordered_map<uint32_t, std::vector<ShaderToggler::ToggleGroup*>> _pixelShaderHashToToggleGroups;
     std::unordered_map<uint32_t, std::vector<ShaderToggler::ToggleGroup*>> _vertexShaderHashToToggleGroups;
     std::unordered_map<uint32_t, std::vector<ShaderToggler::ToggleGroup*>> _computeShaderHashToToggleGroups;
+    // Guards the three hash->groups maps above: they are rebuilt on the UI thread while render threads read them.
+    mutable std::shared_mutex _shaderHashToToggleGroupsMutex;
     int _startValueFramecountCollectionPhase = FRAMECOUNT_COLLECTION_PHASE_DEFAULT;
     float _overlayOpacity = 0.2f;
     uint32_t _keyBindings[ARRAYSIZE(KeybindNames)];
@@ -119,9 +128,23 @@ class AddonUIData {
                 Shim::Constants::ConstantHandlerBase* constants,
                 std::atomic_uint32_t* activeCollectorFrameCounter);
     std::unordered_map<int, ShaderToggler::ToggleGroup>& GetToggleGroups();
-    const std::vector<ShaderToggler::ToggleGroup*>* GetToggleGroupsForPixelShaderHash(uint32_t hash);
-    const std::vector<ShaderToggler::ToggleGroup*>* GetToggleGroupsForVertexShaderHash(uint32_t hash);
-    const std::vector<ShaderToggler::ToggleGroup*>* GetToggleGroupsForComputeShaderHash(uint32_t hash);
+    std::unordered_map<int, ShaderToggler::ToggleGroup>& GetRetiredToggleGroups();
+    /// <summary>
+    /// Removes the group with the passed in id from the live groups and keeps it alive as a retired
+    /// group, so render threads still holding its pointer can't hit freed memory. No-op if the id is unknown.
+    /// </summary>
+    void RetireToggleGroup(int id);
+    /// <summary>
+    /// Retires all live groups. Use instead of GetToggleGroups().clear().
+    /// </summary>
+    void RetireAllToggleGroups();
+    /// <summary>
+    /// Destroys all retired groups. Only call once the device is gone (no render thread can reference them).
+    /// </summary>
+    void ClearRetiredToggleGroups();
+    std::vector<ShaderToggler::ToggleGroup*> GetToggleGroupsForPixelShaderHash(uint32_t hash);
+    std::vector<ShaderToggler::ToggleGroup*> GetToggleGroupsForVertexShaderHash(uint32_t hash);
+    std::vector<ShaderToggler::ToggleGroup*> GetToggleGroupsForComputeShaderHash(uint32_t hash);
     void UpdateToggleGroupsForShaderHashes();
     void AddDefaultGroup();
     const std::atomic_int& GetToggleGroupIdShaderEditing() const;

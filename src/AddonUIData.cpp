@@ -71,6 +71,65 @@ unordered_map<int, ToggleGroup>& AddonUIData::GetToggleGroups()
     return _toggleGroups;
 }
 
+
+unordered_map<int, ToggleGroup>& AddonUIData::GetRetiredToggleGroups()
+{
+    return _retiredToggleGroups;
+}
+
+
+void AddonUIData::RetireToggleGroup(int id)
+{
+    // Move the node (and therefore the ToggleGroup object itself) into the retired map instead of
+    // destroying it: render threads may still hold a raw pointer to it in their command list queues.
+    // The object stays at the same address until ClearRetiredToggleGroups() runs at device teardown.
+    auto node = _toggleGroups.extract(id);
+
+    if (node.empty())
+    {
+        return;
+    }
+
+    // Group ids are handed out monotonically, so this cannot normally happen. If a collision ever
+    // does occur we must still not drop the node: inserting would fail and destroy the object, which
+    // is exactly the use-after-free this function exists to prevent. Re-key it to a free id instead.
+    if (_retiredToggleGroups.contains(node.key()))
+    {
+        int retiredKey = -1;
+
+        while (_retiredToggleGroups.contains(retiredKey))
+        {
+            retiredKey--;
+        }
+
+        node.key() = retiredKey;
+    }
+
+    // A retired group must never be treated as a live group again, even if a stale pointer is
+    // consumed before the queues that reference it drain.
+    node.mapped().setRetired(true);
+    node.mapped().setActive(false);
+    node.mapped().clearHashes();
+
+    _retiredToggleGroups.insert(std::move(node));
+}
+
+
+void AddonUIData::RetireAllToggleGroups()
+{
+    while (!_toggleGroups.empty())
+    {
+        RetireToggleGroup(_toggleGroups.begin()->first);
+    }
+}
+
+
+void AddonUIData::ClearRetiredToggleGroups()
+{
+    // Only safe once the device is gone: no render thread can hold pointers into these groups anymore.
+    _retiredToggleGroups.clear();
+}
+
 void AddonUIData::AddToggleGroupRemovalCallback(std::function<void(reshade::api::effect_runtime*, ShaderToggler::ToggleGroup*)> callback)
 {
     _removalCallbacks.push_back(callback);
@@ -92,44 +151,52 @@ void AddonUIData::AssignPreferredGroupTechniques(std::unordered_map<std::string,
     }
 }
 
-const vector<ToggleGroup*>* AddonUIData::GetToggleGroupsForPixelShaderHash(uint32_t hash)
+vector<ToggleGroup*> AddonUIData::GetToggleGroupsForPixelShaderHash(uint32_t hash)
 {
+    shared_lock<shared_mutex> lock(_shaderHashToToggleGroupsMutex);
+
     const auto& it = _pixelShaderHashToToggleGroups.find(hash);
 
     if (it != _pixelShaderHashToToggleGroups.end())
     {
-        return &it->second;
+        return it->second;
     }
 
-    return nullptr;
+    return {};
 }
 
-const vector<ToggleGroup*>* AddonUIData::GetToggleGroupsForVertexShaderHash(uint32_t hash)
+vector<ToggleGroup*> AddonUIData::GetToggleGroupsForVertexShaderHash(uint32_t hash)
 {
+    shared_lock<shared_mutex> lock(_shaderHashToToggleGroupsMutex);
+
     const auto& it = _vertexShaderHashToToggleGroups.find(hash);
 
     if (it != _vertexShaderHashToToggleGroups.end())
     {
-        return &it->second;
+        return it->second;
     }
 
-    return nullptr;
+    return {};
 }
 
-const vector<ToggleGroup*>* AddonUIData::GetToggleGroupsForComputeShaderHash(uint32_t hash)
+vector<ToggleGroup*> AddonUIData::GetToggleGroupsForComputeShaderHash(uint32_t hash)
 {
+    shared_lock<shared_mutex> lock(_shaderHashToToggleGroupsMutex);
+
     const auto& it = _computeShaderHashToToggleGroups.find(hash);
 
     if (it != _computeShaderHashToToggleGroups.end())
     {
-        return &it->second;
+        return it->second;
     }
 
-    return nullptr;
+    return {};
 }
 
 void AddonUIData::UpdateToggleGroupsForShaderHashes()
 {
+    unique_lock<shared_mutex> lock(_shaderHashToToggleGroupsMutex);
+
     _pixelShaderHashToToggleGroups.clear();
     _vertexShaderHashToToggleGroups.clear();
     _computeShaderHashToToggleGroups.clear();

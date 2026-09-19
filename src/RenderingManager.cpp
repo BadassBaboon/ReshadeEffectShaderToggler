@@ -263,6 +263,15 @@ void RenderingManager::QueueOrDequeue(command_list* cmd_list,
                                       uint64_t action) {
     for (auto it = queue.begin(); it != queue.end();) {
         auto& [name, data] = *it;
+
+        // A group can be retired (removed in the UI) while its entry is still queued here. Its GPU
+        // resources have already been disposed by the removal callback, so drop the entry instead of
+        // querying resources for it. (The object itself stays alive so this erase is safe.)
+        if (data.group->isRetired()) {
+            it = queue.erase(it);
+            continue;
+        }
+
         // Set views during draw call since we can be sure the correct ones are bound at that point
         if (!callLocation && data.resource == 0) {
             ResourceViewData active_data = GetCurrentResourceView(cmd_list, deviceData, data.group, commandListData, layoutIndex, action);

@@ -44,6 +44,10 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
 
     ToggleGroup& group = groupIt->second;
 
+    if (group.isRetired()) {
+        return;
+    }
+
     // Set views during draw call since we can be sure the correct ones are bound at that point
     if (!callLocation && deviceData.huntPreview.target == 0) {
         ResourceViewData active_target;

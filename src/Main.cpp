@@ -121,9 +121,15 @@ static void onDestroyDevice(device* device) {
     DeviceDataContainer& data = device->get_private_data<DeviceDataContainer>();
 
     groupResourceManager.DisposeGroupBuffers(device, g_addonUIData.GetToggleGroups());
+    groupResourceManager.DisposeGroupBuffers(device, g_addonUIData.GetRetiredToggleGroups());
     renderingBindingManager.DisposeTextureBindings(device, g_addonUIData.GetToggleGroups());
+    renderingBindingManager.DisposeTextureBindings(device, g_addonUIData.GetRetiredToggleGroups());
     resourceManager.OnDestroyDevice(device);
     renderingShaderManager.DestroyShaders(device);
+
+    // The device is gone, so no render thread can hold a pointer into the groups we retired
+    // earlier. This is the only safe place to actually destroy them.
+    g_addonUIData.ClearRetiredToggleGroups();
 
     device->destroy_private_data<DeviceDataContainer>();
 }
@@ -249,12 +255,17 @@ static void onDestroyEffectRuntime(effect_runtime* runtime) {
     // so release REST's device-owned objects here while the runtime is still valid.
     if (device->get_api() == device_api::d3d9 && !hasOtherRuntimeOnDevice) {
         groupResourceManager.DisposeGroupBuffers(device, g_addonUIData.GetToggleGroups());
+        // Retired groups are included: they can still hold a non-owning reference to a swapchain
+        // resource, which has to be released before the native Reset.
+        groupResourceManager.DisposeGroupBuffers(device, g_addonUIData.GetRetiredToggleGroups());
         renderingBindingManager.DisposeTextureBindings(device, g_addonUIData.GetToggleGroups());
+        renderingBindingManager.DisposeTextureBindings(device, g_addonUIData.GetRetiredToggleGroups());
         resourceManager.OnDestroyDevice(device, true);
         renderingShaderManager.DestroyShaders(device);
         reshade::log::message(reshade::log::level::info, "Released REST D3D9 resources before runtime reset");
     } else {
         renderingBindingManager.DisposeTextureBindings(device, g_addonUIData.GetToggleGroups());
+        renderingBindingManager.DisposeTextureBindings(device, g_addonUIData.GetRetiredToggleGroups());
     }
 
     // Remove runtime from stack
@@ -443,7 +454,7 @@ static void onBeginRenderPass(command_list* cmd_list, uint32_t count, const rend
     CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
     DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
 
-    if (!deviceData.current_runtime->get_effects_state()) {
+    if (deviceData.current_runtime == nullptr || !deviceData.current_runtime->get_effects_state()) {
         return;
     }
 

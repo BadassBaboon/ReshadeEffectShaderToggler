@@ -235,28 +235,43 @@ void ConstantHandlerBase::UpdateConstants(command_list* cmd_list) {
     vector<ToggleGroup*> csRemovalList;
 
     for (const auto& cb : commandListData.ps.constantBuffersToUpdate) {
+        if (cb->isRetired()) {
+            psRemovalList.push_back(cb);
+            continue;
+        }
+
         if (!deviceData.constantsUpdated.contains(cb)) {
             if (!cb->getCBIsPushMode() && UpdateConstantBufferEntries(cmd_list, commandListData, deviceData, cb, cb->getCBShaderStage()) ||
                 cb->getCBIsPushMode() && UpdateConstantEntries(cmd_list, commandListData, deviceData, cb, cb->getCBShaderStage())) {
-                psRemovalList.push_back(cb);
+                psRemovalList.push_back(const_cast<ToggleGroup*>(cb));
             }
         }
     }
 
     for (const auto& cb : commandListData.vs.constantBuffersToUpdate) {
+        if (cb->isRetired()) {
+            vsRemovalList.push_back(cb);
+            continue;
+        }
+
         if (!deviceData.constantsUpdated.contains(cb)) {
             if (!cb->getCBIsPushMode() && UpdateConstantBufferEntries(cmd_list, commandListData, deviceData, cb, cb->getCBShaderStage()) ||
                 cb->getCBIsPushMode() && UpdateConstantEntries(cmd_list, commandListData, deviceData, cb, cb->getCBShaderStage())) {
-                vsRemovalList.push_back(cb);
+                vsRemovalList.push_back(const_cast<ToggleGroup*>(cb));
             }
         }
     }
 
     for (const auto& cb : commandListData.cs.constantBuffersToUpdate) {
+        if (cb->isRetired()) {
+            csRemovalList.push_back(cb);
+            continue;
+        }
+
         if (!deviceData.constantsUpdated.contains(cb)) {
             if (!cb->getCBIsPushMode() && UpdateConstantBufferEntries(cmd_list, commandListData, deviceData, cb, cb->getCBShaderStage()) ||
                 cb->getCBIsPushMode() && UpdateConstantEntries(cmd_list, commandListData, deviceData, cb, cb->getCBShaderStage())) {
-                csRemovalList.push_back(cb);
+                csRemovalList.push_back(const_cast<ToggleGroup*>(cb));
             }
         }
     }

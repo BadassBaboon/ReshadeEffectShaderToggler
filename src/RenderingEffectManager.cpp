@@ -85,6 +85,12 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         const auto& group = tech.first;
         const auto& [effectList, active_resource] = tech.second;
 
+        // A group can be retired (removed in the UI) while its entry is still queued here. It is kept
+        // alive for exactly this reason, but must not render anymore.
+        if (group->isRetired()) {
+            continue;
+        }
+
         if (active_resource.resource == 0) {
             continue;
         }

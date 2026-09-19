@@ -109,12 +109,20 @@ class ToggleGroup {
     void clearHashes();
 
     void toggleActive() { _isActive = !_isActive; }
+    void setActive(bool isActive) { _isActive = isActive; }
     void setEditing(bool isEditing) { _isEditing = isEditing; }
 
     uint32_t getToggleKey() { return _keybind; }
     std::string getName() { return _name; }
     bool isActive() const { return _isActive; }
     bool isEditing() { return _isEditing; }
+    /// <summary>
+    /// True once the group has been removed in the UI. Retired groups are kept alive (see
+    /// AddonUIData::_retiredToggleGroups) until device teardown, but must not be treated as
+    /// live groups by the render threads that may still hold a stale pointer to them.
+    /// </summary>
+    bool isRetired() const { return _isRetired; }
+    void setRetired(bool isRetired) { _isRetired = isRetired; }
     bool isEmpty() const { return _vertexShaderHashes.size() <= 0 && _pixelShaderHashes.size() <= 0; }
     int getId() const { return _id; }
     void setId(int id) { _id = id; }
@@ -240,6 +248,7 @@ class ToggleGroup {
     uint32_t _renderSrvShaderStage = 0;
     bool _isActive;           // true means the group is actively toggled (so the hashes have to be hidden.
     bool _isEditing;          // true means the group is actively edited (name, key)
+    bool _isRetired = false;  // true means the group was removed and only lives on so stale render-thread pointers stay valid
     bool _allowAllTechniques; // true means all techniques are allowed, regardless of preferred techniques.
     volatile bool _isProvidingTextureBinding;
     volatile bool _copyTextureBinding;

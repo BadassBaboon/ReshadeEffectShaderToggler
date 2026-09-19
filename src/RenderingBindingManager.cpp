@@ -150,6 +150,15 @@ void RenderingBindingManager::_QueueOrDequeue(command_list* cmd_list,
                                               uint64_t action) {
     for (auto it = queue.begin(); it != queue.end();) {
         auto& [group, data] = *it;
+
+        // A group can be retired (removed in the UI) while its entry is still queued here. Its GPU
+        // resources have already been disposed by the removal callback, so drop the entry instead of
+        // querying resources for it. (The object itself stays alive so this erase is safe.)
+        if (group->isRetired()) {
+            it = queue.erase(it);
+            continue;
+        }
+
         // Set views during draw call since we can be sure the correct ones are bound at that point
         if (!callLocation && data.resource == 0) {
             ResourceViewData active_data = RenderingManager::GetCurrentResourceView(cmd_list, deviceData, group, commandListData, layoutIndex, action);
@@ -191,6 +200,12 @@ void RenderingBindingManager::_UpdateTextureBindings(command_list* cmd_list,
     for (auto& [group, bindingData] : bindingsToUpdate) {
         if (toUpdateBindings.contains(group) && !deviceData.bindingsUpdated.contains(group)) {
             if (bindingData.resource == 0) {
+                continue;
+            }
+
+            // A group can be retired (removed in the UI) while its entry is still queued here. It is
+            // kept alive for exactly this reason, but must not bind anymore.
+            if (group->isRetired()) {
                 continue;
             }
 
@@ -337,12 +352,21 @@ void RenderingBindingManager::UpdateTextureBindings(command_list* cmd_list, uint
 void RenderingBindingManager::ClearUnmatchedTextureBindings(reshade::api::command_list* cmd_list) {
     DeviceDataContainer& data = cmd_list->get_device()->get_private_data<DeviceDataContainer>();
 
+    if (data.current_runtime == nullptr) {
+        return;
+    }
+
     shared_lock<shared_mutex> mtx(data.binding_mutex);
 
     static const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
     for (auto& groupData : uiData.GetToggleGroups()) {
         ToggleGroup& group = groupData.second;
+
+        if (group.isRetired()) {
+            continue;
+        }
+
         GroupResource& resources = group.GetGroupResource(ShaderToggler::GroupResourceType::RESOURCE_BINDING);
 
         if (!data.bindingsUpdated.contains(&group) &&

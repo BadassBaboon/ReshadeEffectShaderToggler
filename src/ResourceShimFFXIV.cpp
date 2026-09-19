@@ -39,6 +39,9 @@ bool ResourceShimFFXIV::OnCreateResource(reshade::api::device* device,
                     switch (RT_OFFSET_LIST[i]) {
                         case RT_OFFSET::RT_UI: {
                             DeviceDataContainer& dev = device->get_private_data<DeviceDataContainer>();
+                            if (dev.current_runtime == nullptr) {
+                                return false;
+                            }
                             resource_desc d = device->get_resource_desc(dev.current_runtime->get_current_back_buffer());
 
                             desc.texture.format = format_to_typeless(d.texture.format);
@@ -65,6 +68,9 @@ bool ResourceShimFFXIV::OnCreateResource(reshade::api::device* device,
             switch (rt_offset) {
                 case RT_OFFSET::RT_UI: {
                     DeviceDataContainer& dev = device->get_private_data<DeviceDataContainer>();
+                    if (dev.current_runtime == nullptr) {
+                        return false;
+                    }
                     resource_desc d = device->get_resource_desc(dev.current_runtime->get_current_back_buffer());
 
                     desc.texture.format = format_to_typeless(d.texture.format);
