@@ -305,6 +305,7 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
     bool tonemap = group->getToneMap();
     bool preserveAlpha = group->getPreserveAlpha();
     bool flipbuffer = group->getFlipBuffer();
+    bool suppressDraw = group->getSuppressDrawCall();
     static const char* swapchainMatchOptions[] = { "RESOLUTION", "ASPECT RATIO", "EXTENDED ASPECT RATIO", "NONE" };
     uint32_t selectedSwapchainMatchMode = group->getMatchSwapchainResolution();
     const char* typesSelectedSwapchainMatchMode = swapchainMatchOptions[selectedSwapchainMatchMode];
@@ -496,6 +497,13 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
                 ImGui::EndCombo();
             }
 
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+
+            ImGui::Text("Suppress draw calls");
+            ImGui::TableNextColumn();
+            ImGui::Checkbox("##SuppressDrawCall", &suppressDraw);
+
             ImGui::EndTable();
         }
 
@@ -505,6 +513,7 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
         group->setToneMap(tonemap);
         group->setPreserveAlpha(preserveAlpha);
         group->setFlipBuffer(flipbuffer);
+        group->setSuppressDrawCall(suppressDraw);
 
         ImGui::Separator();
 
@@ -1345,6 +1354,17 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
                     group.setToggleKey(keys);
                 }
                 ImGui::PopItemWidth();
+
+                // Suppress Draw Calls
+                bool suppress = group.getSuppressDrawCall();
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("Suppress draw calls");
+                ImGui::SameLine(ImGui::GetWindowWidth() * 0.2f);
+                if (ImGui::Checkbox("##SuppressDrawCall", &suppress)) {
+                    group.setSuppressDrawCall(suppress);
+                }
+                ImGui::SameLine();
+                ShowHelpMarker("When enabled and this group is active, draw calls using this group's shaders are suppressed directly on the GPU, hiding elements (like HUD/UI) without requiring ReShade effects.");
 
                 if (ImGui::Button("OK")) {
                     group.setEditing(false);

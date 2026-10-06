@@ -586,12 +586,23 @@ static void CheckDrawCall(command_list* cmd_list, const uint64_t match_modifier 
     }
 }
 
+static bool isDrawCallSuppressed(const std::vector<ShaderToggler::ToggleGroup*>& groups) {
+    for (const auto* group : groups) {
+        if (group != nullptr && !group->isRetired() && group->isActive() && group->getSuppressDrawCall()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool onDraw(command_list* cmd_list, uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance) {
     CheckDrawCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS);
 
     CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
     if (g_pixelShaderManager.isBlockedShader(commandListData.ps.activeShaderHash) ||
-        g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash)) {
+        g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash) ||
+        isDrawCallSuppressed(commandListData.ps.blockedShaderGroups) ||
+        isDrawCallSuppressed(commandListData.vs.blockedShaderGroups)) {
         return true;
     }
 
@@ -614,7 +625,9 @@ static bool onDrawIndexed(command_list* cmd_list,
 
     CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
     if (g_pixelShaderManager.isBlockedShader(commandListData.ps.activeShaderHash) ||
-        g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash)) {
+        g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash) ||
+        isDrawCallSuppressed(commandListData.ps.blockedShaderGroups) ||
+        isDrawCallSuppressed(commandListData.vs.blockedShaderGroups)) {
         return true;
     }
 
@@ -640,7 +653,9 @@ static bool onDrawOrDispatchIndirect(command_list* cmd_list, indirect_command ty
         case indirect_command::draw:
         case indirect_command::draw_indexed:
             if (g_pixelShaderManager.isBlockedShader(commandListData.ps.activeShaderHash) ||
-                g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash)) {
+                g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash) ||
+                isDrawCallSuppressed(commandListData.ps.blockedShaderGroups) ||
+                isDrawCallSuppressed(commandListData.vs.blockedShaderGroups)) {
                 return true;
             }
             break;

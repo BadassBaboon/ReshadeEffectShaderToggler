@@ -196,6 +196,8 @@ class ToggleGroup {
     void setFlipBuffer(bool flip) { _flipBuffer = flip; }
     bool getFlipBufferBinding() const { return _flipBufferBinding; }
     void setFlipBufferBinding(bool flip) { _flipBufferBinding = flip; }
+    bool getSuppressDrawCall() const { return _suppressDrawCall; }
+    void setSuppressDrawCall(bool suppress) { _suppressDrawCall = suppress; }
     void dispatchCBCycle(DescriptorCycle cycle) { _cbCycle = cycle; }
     DescriptorCycle consumeCBCycle() {
         DescriptorCycle ret = _cbCycle;
@@ -262,6 +264,7 @@ class ToggleGroup {
     volatile bool _preserveAlpha = false;
     bool _flipBuffer = false;
     bool _flipBufferBinding = false;
+    bool _suppressDrawCall = false;
     uint32_t _matchSwapchainResolution = SWAPCHAIN_MATCH_MODE_RESOLUTION;
     uint32_t _bindingMatchSwapchainResolution = SWAPCHAIN_MATCH_MODE_RESOLUTION;
     bool _requeueAfterRTMatchingFailure;

@@ -115,6 +115,7 @@ ToggleGroup::ToggleGroup(const ToggleGroup& other)
     _preserveAlpha = other._preserveAlpha;
     _flipBuffer = other._flipBuffer;
     _flipBufferBinding = other._flipBufferBinding;
+    _suppressDrawCall = other._suppressDrawCall;
     _matchSwapchainResolution = other._matchSwapchainResolution;
     _bindingMatchSwapchainResolution = other._bindingMatchSwapchainResolution;
     _requeueAfterRTMatchingFailure = other._requeueAfterRTMatchingFailure;
@@ -302,6 +303,7 @@ void ToggleGroup::saveState(CDataFile& iniFile, int groupCounter) const {
     iniFile.SetBool("TonemapHDRtoSDRtoHDR", _tonemapHDRtoSDRtoHDR, "", sectionRoot);
     iniFile.SetBool("PreserveTargetAlphaChannel", _preserveAlpha, "", sectionRoot);
     iniFile.SetBool("FlipBuffer", _flipBuffer, "", sectionRoot);
+    iniFile.SetBool("SuppressDrawCall", _suppressDrawCall, "", sectionRoot);
 }
 
 static std::vector<std::string> split(std::string& str, char delimiter) {
@@ -539,5 +541,7 @@ void ToggleGroup::loadState(CDataFile& iniFile, int groupCounter) {
     _flipBuffer = iniFile.GetBoolOrDefault("FlipBuffer", sectionRoot, false);
 
     _flipBufferBinding = iniFile.GetBoolOrDefault("FlipBufferBinding", sectionRoot, false);
+
+    _suppressDrawCall = iniFile.GetBoolOrDefault("SuppressDrawCall", sectionRoot, false);
 }
 }
