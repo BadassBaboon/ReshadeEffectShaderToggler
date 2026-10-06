@@ -177,6 +177,11 @@ void ToggleGroupResourceManager::CheckGroupBuffers(reshade::api::effect_runtime*
             if (static_cast<GroupResourceType>(i) == GroupResourceType::RESOURCE_ALPHA ||
                 static_cast<GroupResourceType>(i) == GroupResourceType::RESOURCE_BINDING ||
                 static_cast<GroupResourceType>(i) == GroupResourceType::RESOURCE_NATIVE_STAGING) {
+                resource_desc desc = resources.target_description;
+                if (desc.texture.width == 0 || desc.texture.height == 0 || desc.texture.format == format::unknown) {
+                    continue;
+                }
+
                 reshade::api::resource_usage res_usage = resource_usage::copy_dest | resource_usage::copy_source | resource_usage::shader_resource;
 
                 bool validRT = isValidRenderTarget(resources.target_description.texture.format);
@@ -184,7 +189,6 @@ void ToggleGroupResourceManager::CheckGroupBuffers(reshade::api::effect_runtime*
                     res_usage |= resource_usage::render_target;
                 }
 
-                resource_desc desc = resources.target_description;
                 const bool vulkan = runtime->get_device()->get_api() == device_api::vulkan;
                 const reshade::api::format groupFormat =
                   vulkan

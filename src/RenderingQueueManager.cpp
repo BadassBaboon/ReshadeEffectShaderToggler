@@ -149,8 +149,8 @@ void RenderingQueueManager::CheckCallForCommandList(reshade::api::command_list* 
     RuntimeDataContainer& runtimeData = deviceData.current_runtime->get_private_data<RuntimeDataContainer>();
 
     shared_lock<shared_mutex> t_mutex(runtimeData.technique_mutex);
-    unique_lock<shared_mutex> b_mutex(deviceData.binding_mutex);
-    unique_lock<shared_mutex> r_mutex(deviceData.render_mutex);
+    shared_lock<shared_mutex> b_mutex(deviceData.binding_mutex);
+    shared_lock<shared_mutex> r_mutex(deviceData.render_mutex);
 
     _CheckCallForCommandList(commandListData.ps, commandListData, deviceData, runtimeData);
     _CheckCallForCommandList(commandListData.vs, commandListData, deviceData, runtimeData);

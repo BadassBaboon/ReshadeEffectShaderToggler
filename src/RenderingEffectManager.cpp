@@ -354,13 +354,15 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         uint32_t renderedTechniqueCount = 0;
         std::string renderedTechniqueOrder;
         for (const auto& effectTech : effectList) {
-            char techniqueName[256] = {};
-            size_t techniqueNameSize = sizeof(techniqueName);
-            runtime->get_technique_name(effectTech->technique, techniqueName, &techniqueNameSize);
+            if (autoSceneColour) {
+                char techniqueName[256] = {};
+                size_t techniqueNameSize = sizeof(techniqueName);
+                runtime->get_technique_name(effectTech->technique, techniqueName, &techniqueNameSize);
 
-            if (!renderedTechniqueOrder.empty())
-                renderedTechniqueOrder += " -> ";
-            renderedTechniqueOrder += techniqueName;
+                if (!renderedTechniqueOrder.empty())
+                    renderedTechniqueOrder += " -> ";
+                renderedTechniqueOrder += techniqueName;
+            }
 
             runtime->render_technique(effectTech->technique, cmd_list, view_non_srgb, view_srgb);
 
@@ -372,7 +374,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
             rendered = true;
         }
 
-        if (renderedTechniqueCount > 0) {
+        if (renderedTechniqueCount > 0 && autoSceneColour) {
             const uint32_t effectWidth = useNativeStaging ? runtimeWidth : desc.texture.width;
             const uint32_t effectHeight = useNativeStaging ? runtimeHeight : desc.texture.height;
             group->recordDebugEffectRender(renderedTechniqueCount,
@@ -629,12 +631,19 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
     }
 
     shared_lock<shared_mutex> techLock(runtimeData.technique_mutex);
-    rendered =
-      (psToRenderNames.size() > 0) &&
-        _RenderEffects(cmd_list, deviceData, runtimeData, commandListData.ps.techniquesToRender, psRemovalList, psToRenderNames) ||
-      (vsToRenderNames.size() > 0) &&
-        _RenderEffects(cmd_list, deviceData, runtimeData, commandListData.vs.techniquesToRender, vsRemovalList, vsToRenderNames) ||
-      (csToRenderNames.size() > 0) && _RenderEffects(cmd_list, deviceData, runtimeData, commandListData.cs.techniquesToRender, csRemovalList, csToRenderNames);
+    bool psRendered = false;
+    if (psToRenderNames.size() > 0) {
+        psRendered = _RenderEffects(cmd_list, deviceData, runtimeData, commandListData.ps.techniquesToRender, psRemovalList, psToRenderNames);
+    }
+    bool vsRendered = false;
+    if (vsToRenderNames.size() > 0) {
+        vsRendered = _RenderEffects(cmd_list, deviceData, runtimeData, commandListData.vs.techniquesToRender, vsRemovalList, vsToRenderNames);
+    }
+    bool csRendered = false;
+    if (csToRenderNames.size() > 0) {
+        csRendered = _RenderEffects(cmd_list, deviceData, runtimeData, commandListData.cs.techniquesToRender, csRemovalList, csToRenderNames);
+    }
+    rendered = psRendered || vsRendered || csRendered;
     techLock.unlock();
 
     for (auto& g : psRemovalList) {
@@ -647,6 +656,10 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
 
     for (auto& g : csRemovalList) {
         commandListData.cs.techniquesToRender.erase(g);
+    }
+
+    if (!commandListData.ps.techniquesToRender.empty() || !commandListData.vs.techniquesToRender.empty() || !commandListData.cs.techniquesToRender.empty()) {
+        commandListData.commandQueue |= (invocation << (callLocation * MATCH_DELIMITER));
     }
 
     if (rendered) {

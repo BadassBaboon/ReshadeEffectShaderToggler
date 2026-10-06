@@ -524,14 +524,13 @@ static void onBeginRenderPass(command_list* cmd_list, uint32_t count, const rend
         commandListData.vulkanInsideRenderPass = true;
         commandListData.vulkanRenderPassEndPending = false;
         commandListData.vulkanRenderPassSuspends = false;
-    }
+        if (commandListData.commandQueue & Rendering::CHECK_MATCH_DRAW_BINDING) {
+            renderingBindingManager.UpdateTextureBindings(cmd_list, Rendering::CALL_DRAW, Rendering::MATCH_BINDING_PS | Rendering::MATCH_BINDING_VS);
+        }
 
-    if (commandListData.commandQueue & Rendering::CHECK_MATCH_DRAW_BINDING) {
-        renderingBindingManager.UpdateTextureBindings(cmd_list, Rendering::CALL_DRAW, Rendering::MATCH_BINDING_PS | Rendering::MATCH_BINDING_VS);
-    }
-
-    if (commandListData.commandQueue & Rendering::CHECK_MATCH_DRAW_EFFECT) {
-        renderingEffectManager.RenderEffects(cmd_list, Rendering::CALL_DRAW, Rendering::MATCH_EFFECT_PS | Rendering::MATCH_EFFECT_VS);
+        if (commandListData.commandQueue & Rendering::CHECK_MATCH_DRAW_EFFECT) {
+            renderingEffectManager.RenderEffects(cmd_list, Rendering::CALL_DRAW, Rendering::MATCH_EFFECT_PS | Rendering::MATCH_EFFECT_VS);
+        }
     }
 }
 
