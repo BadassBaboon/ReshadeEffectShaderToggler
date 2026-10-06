@@ -91,6 +91,10 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
             continue;
         }
 
+        if (cmdData.hasDrawGeometry && !group->matchesDrawGeometry(cmdData.isIndexedDraw, cmdData.currentDrawCount, cmdData.currentInstanceCount)) {
+            continue;
+        }
+
         if (active_resource.resource == 0) {
             continue;
         }
@@ -337,6 +341,10 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
 
     for (auto& g : csRemovalList) {
         commandListData.cs.techniquesToRender.erase(g);
+    }
+
+    if (!commandListData.ps.techniquesToRender.empty() || !commandListData.vs.techniquesToRender.empty() || !commandListData.cs.techniquesToRender.empty()) {
+        commandListData.commandQueue |= (invocation << (callLocation * MATCH_DELIMITER));
     }
 
     if (rendered) {

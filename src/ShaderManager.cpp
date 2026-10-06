@@ -87,6 +87,7 @@ void ShaderManager::stopHuntingMode() {
     _isInHuntingMode = false;
     _activeHuntedShaderIndex = -1;
     _activeHuntedShaderHash = 0;
+    clearObservedDrawGeometries();
     {
         unique_lock lock(_markedShaderHashMutex);
         _markedShaderHashes.clear();
@@ -94,6 +95,7 @@ void ShaderManager::stopHuntingMode() {
 }
 
 void ShaderManager::setActiveHuntedShaderHandle() {
+    clearObservedDrawGeometries();
     if (_activeHuntedShaderIndex < 0 || _collectedActiveShaderHashes.size() == 0 ||
         static_cast<size_t>(_activeHuntedShaderIndex) >= _collectedActiveShaderHashes.size()) {
         _activeHuntedShaderHash = 0;
@@ -270,5 +272,33 @@ uint32_t ShaderManager::getShaderHash(uint64_t handle) {
         return 0;
     }
     return _handleToShaderHash.at(handle);
+}
+
+void ShaderManager::recordDrawGeometry(uint32_t shaderHash, bool isIndexed, uint32_t count, uint32_t instanceCount) {
+    if (!_isInHuntingMode || shaderHash == 0 || shaderHash != _activeHuntedShaderHash) {
+        return;
+    }
+
+    std::unique_lock lock(_drawGeometryMutex);
+    for (auto& stat : _observedDrawGeometries) {
+        if (stat.isIndexed == isIndexed && stat.count == count && stat.instanceCount == instanceCount) {
+            stat.invocations++;
+            return;
+        }
+    }
+
+    if (_observedDrawGeometries.size() < 32) {
+        _observedDrawGeometries.push_back({ isIndexed, count, instanceCount, 1 });
+    }
+}
+
+std::vector<DrawGeometryStats> ShaderManager::getObservedDrawGeometries() const {
+    std::shared_lock lock(_drawGeometryMutex);
+    return _observedDrawGeometries;
+}
+
+void ShaderManager::clearObservedDrawGeometries() {
+    std::unique_lock lock(_drawGeometryMutex);
+    _observedDrawGeometries.clear();
 }
 }

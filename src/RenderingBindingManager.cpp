@@ -209,6 +209,11 @@ void RenderingBindingManager::_UpdateTextureBindings(command_list* cmd_list,
                 continue;
             }
 
+            CommandListDataContainer& cmdData = cmd_list->get_private_data<CommandListDataContainer>();
+            if (cmdData.hasDrawGeometry && !group->matchesDrawGeometry(cmdData.isIndexedDraw, cmdData.currentDrawCount, cmdData.currentInstanceCount)) {
+                continue;
+            }
+
             GroupResource& bindingResource = group->GetGroupResource(ShaderToggler::GroupResourceType::RESOURCE_BINDING);
 
             if (!group->getCopyTextureBinding()) {
@@ -346,6 +351,10 @@ void RenderingBindingManager::UpdateTextureBindings(command_list* cmd_list, uint
 
     for (auto& g : csRemovalList) {
         commandListData.cs.bindingsToUpdate.erase(g);
+    }
+
+    if (!commandListData.ps.bindingsToUpdate.empty() || !commandListData.vs.bindingsToUpdate.empty() || !commandListData.cs.bindingsToUpdate.empty()) {
+        commandListData.commandQueue |= (invocation << (callLocation * MATCH_DELIMITER));
     }
 }
 

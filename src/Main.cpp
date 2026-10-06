@@ -586,23 +586,41 @@ static void CheckDrawCall(command_list* cmd_list, const uint64_t match_modifier 
     }
 }
 
-static bool isDrawCallSuppressed(const std::vector<ShaderToggler::ToggleGroup*>& groups) {
+static bool isDrawCallSuppressed(const std::vector<ShaderToggler::ToggleGroup*>& groups, const CommandListDataContainer& cmdData) {
     for (const auto* group : groups) {
         if (group != nullptr && !group->isRetired() && group->isActive() && group->getSuppressDrawCall()) {
-            return true;
+            if (!cmdData.hasDrawGeometry) {
+                if (!group->hasGeometryFilter()) {
+                    return true;
+                }
+            } else if (group->matchesDrawGeometry(cmdData.isIndexedDraw, cmdData.currentDrawCount, cmdData.currentInstanceCount)) {
+                return true;
+            }
         }
     }
     return false;
 }
 
 static bool onDraw(command_list* cmd_list, uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance) {
+    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    commandListData.hasDrawGeometry = true;
+    commandListData.isIndexedDraw = false;
+    commandListData.currentDrawCount = vertex_count;
+    commandListData.currentInstanceCount = instance_count;
+
+    if (g_pixelShaderManager.isInHuntingMode()) {
+        g_pixelShaderManager.recordDrawGeometry(commandListData.ps.activeShaderHash, false, vertex_count, instance_count);
+    }
+    if (g_vertexShaderManager.isInHuntingMode()) {
+        g_vertexShaderManager.recordDrawGeometry(commandListData.vs.activeShaderHash, false, vertex_count, instance_count);
+    }
+
     CheckDrawCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS);
 
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
     if (g_pixelShaderManager.isBlockedShader(commandListData.ps.activeShaderHash) ||
         g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash) ||
-        isDrawCallSuppressed(commandListData.ps.blockedShaderGroups) ||
-        isDrawCallSuppressed(commandListData.vs.blockedShaderGroups)) {
+        isDrawCallSuppressed(commandListData.ps.blockedShaderGroups, commandListData) ||
+        isDrawCallSuppressed(commandListData.vs.blockedShaderGroups, commandListData)) {
         return true;
     }
 
@@ -610,6 +628,12 @@ static bool onDraw(command_list* cmd_list, uint32_t vertex_count, uint32_t insta
 }
 
 static bool onDispatch(command_list* cmd_list, uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z) {
+    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    commandListData.hasDrawGeometry = false;
+    commandListData.isIndexedDraw = false;
+    commandListData.currentDrawCount = 0;
+    commandListData.currentInstanceCount = 1;
+
     CheckDrawCall(cmd_list, Rendering::MATCH_CS);
 
     return false;
@@ -621,13 +645,25 @@ static bool onDrawIndexed(command_list* cmd_list,
                           uint32_t first_index,
                           int32_t vertex_offset,
                           uint32_t first_instance) {
+    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    commandListData.hasDrawGeometry = true;
+    commandListData.isIndexedDraw = true;
+    commandListData.currentDrawCount = index_count;
+    commandListData.currentInstanceCount = instance_count;
+
+    if (g_pixelShaderManager.isInHuntingMode()) {
+        g_pixelShaderManager.recordDrawGeometry(commandListData.ps.activeShaderHash, true, index_count, instance_count);
+    }
+    if (g_vertexShaderManager.isInHuntingMode()) {
+        g_vertexShaderManager.recordDrawGeometry(commandListData.vs.activeShaderHash, true, index_count, instance_count);
+    }
+
     CheckDrawCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS);
 
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
     if (g_pixelShaderManager.isBlockedShader(commandListData.ps.activeShaderHash) ||
         g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash) ||
-        isDrawCallSuppressed(commandListData.ps.blockedShaderGroups) ||
-        isDrawCallSuppressed(commandListData.vs.blockedShaderGroups)) {
+        isDrawCallSuppressed(commandListData.ps.blockedShaderGroups, commandListData) ||
+        isDrawCallSuppressed(commandListData.vs.blockedShaderGroups, commandListData)) {
         return true;
     }
 
@@ -635,6 +671,12 @@ static bool onDrawIndexed(command_list* cmd_list,
 }
 
 static bool onDrawOrDispatchIndirect(command_list* cmd_list, indirect_command type, resource buffer, uint64_t offset, uint32_t draw_count, uint32_t stride) {
+    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    commandListData.hasDrawGeometry = false;
+    commandListData.isIndexedDraw = false;
+    commandListData.currentDrawCount = 0;
+    commandListData.currentInstanceCount = 1;
+
     switch (type) {
         case indirect_command::unknown:
             CheckDrawCall(cmd_list);
@@ -648,14 +690,13 @@ static bool onDrawOrDispatchIndirect(command_list* cmd_list, indirect_command ty
             break;
     }
 
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
     switch (type) {
         case indirect_command::draw:
         case indirect_command::draw_indexed:
             if (g_pixelShaderManager.isBlockedShader(commandListData.ps.activeShaderHash) ||
                 g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash) ||
-                isDrawCallSuppressed(commandListData.ps.blockedShaderGroups) ||
-                isDrawCallSuppressed(commandListData.vs.blockedShaderGroups)) {
+                isDrawCallSuppressed(commandListData.ps.blockedShaderGroups, commandListData) ||
+                isDrawCallSuppressed(commandListData.vs.blockedShaderGroups, commandListData)) {
                 return true;
             }
             break;

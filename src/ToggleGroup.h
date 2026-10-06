@@ -198,6 +198,59 @@ class ToggleGroup {
     void setFlipBufferBinding(bool flip) { _flipBufferBinding = flip; }
     bool getSuppressDrawCall() const { return _suppressDrawCall; }
     void setSuppressDrawCall(bool suppress) { _suppressDrawCall = suppress; }
+
+    bool getMatchVertexCount() const { return _matchVertexCount; }
+    void setMatchVertexCount(bool match) { _matchVertexCount = match; }
+    uint32_t getVertexCountMin() const { return _vertexCountMin; }
+    void setVertexCountMin(uint32_t min) { _vertexCountMin = min; }
+    uint32_t getVertexCountMax() const { return _vertexCountMax; }
+    void setVertexCountMax(uint32_t max) { _vertexCountMax = max; }
+
+    bool getMatchIndexCount() const { return _matchIndexCount; }
+    void setMatchIndexCount(bool match) { _matchIndexCount = match; }
+    uint32_t getIndexCountMin() const { return _indexCountMin; }
+    void setIndexCountMin(uint32_t min) { _indexCountMin = min; }
+    uint32_t getIndexCountMax() const { return _indexCountMax; }
+    void setIndexCountMax(uint32_t max) { _indexCountMax = max; }
+
+    bool getMatchInstanceCount() const { return _matchInstanceCount; }
+    void setMatchInstanceCount(bool match) { _matchInstanceCount = match; }
+    uint32_t getInstanceCountMin() const { return _instanceCountMin; }
+    void setInstanceCountMin(uint32_t min) { _instanceCountMin = min; }
+    uint32_t getInstanceCountMax() const { return _instanceCountMax; }
+    void setInstanceCountMax(uint32_t max) { _instanceCountMax = max; }
+
+    bool hasGeometryFilter() const {
+        return _matchVertexCount || _matchIndexCount || _matchInstanceCount;
+    }
+
+    bool matchesDrawGeometry(bool isIndexed, uint32_t count, uint32_t instanceCount = 1) const {
+        if (!hasGeometryFilter()) {
+            return true;
+        }
+
+        if (_matchInstanceCount) {
+            if (_instanceCountMin > 0 && instanceCount < _instanceCountMin) return false;
+            if (_instanceCountMax > 0 && instanceCount > _instanceCountMax) return false;
+        }
+
+        if (isIndexed) {
+            if (_matchIndexCount) {
+                if (_indexCountMin > 0 && count < _indexCountMin) return false;
+                if (_indexCountMax > 0 && count > _indexCountMax) return false;
+                return true;
+            }
+            return !_matchVertexCount;
+        } else {
+            if (_matchVertexCount) {
+                if (_vertexCountMin > 0 && count < _vertexCountMin) return false;
+                if (_vertexCountMax > 0 && count > _vertexCountMax) return false;
+                return true;
+            }
+            return !_matchIndexCount;
+        }
+    }
+
     void dispatchCBCycle(DescriptorCycle cycle) { _cbCycle = cycle; }
     DescriptorCycle consumeCBCycle() {
         DescriptorCycle ret = _cbCycle;
@@ -265,6 +318,15 @@ class ToggleGroup {
     bool _flipBuffer = false;
     bool _flipBufferBinding = false;
     bool _suppressDrawCall = false;
+    bool _matchVertexCount = false;
+    uint32_t _vertexCountMin = 0;
+    uint32_t _vertexCountMax = 0;
+    bool _matchIndexCount = false;
+    uint32_t _indexCountMin = 0;
+    uint32_t _indexCountMax = 0;
+    bool _matchInstanceCount = false;
+    uint32_t _instanceCountMin = 0;
+    uint32_t _instanceCountMax = 0;
     uint32_t _matchSwapchainResolution = SWAPCHAIN_MATCH_MODE_RESOLUTION;
     uint32_t _bindingMatchSwapchainResolution = SWAPCHAIN_MATCH_MODE_RESOLUTION;
     bool _requeueAfterRTMatchingFailure;

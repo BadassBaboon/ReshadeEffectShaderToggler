@@ -36,11 +36,13 @@
 #include "ConstantManager.h"
 #include "KeyData.h"
 #include "ResourceManager.h"
+#include <algorithm>
 #include <cwctype>
 #include <format>
 #include <imgui.h>
 #include <ranges>
 #include <reshade.hpp>
+#include <string>
 
 #define MAX_DESCRIPTOR_INDEX 10
 
@@ -503,6 +505,52 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
             ImGui::Text("Suppress draw calls");
             ImGui::TableNextColumn();
             ImGui::Checkbox("##SuppressDrawCall", &suppressDraw);
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Filter by index count");
+            ImGui::TableNextColumn();
+            bool matchIdx = group->getMatchIndexCount();
+            if (ImGui::Checkbox("##MatchIdx", &matchIdx)) {
+                group->setMatchIndexCount(matchIdx);
+            }
+            if (matchIdx) {
+                ImGui::SameLine();
+                int idxMin = static_cast<int>(group->getIndexCountMin());
+                int idxMax = static_cast<int>(group->getIndexCountMax());
+                ImGui::SetNextItemWidth(70.0f);
+                if (ImGui::InputInt("Min##Idx", &idxMin, 0)) {
+                    group->setIndexCountMin(std::max(0, idxMin));
+                }
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(70.0f);
+                if (ImGui::InputInt("Max##Idx", &idxMax, 0)) {
+                    group->setIndexCountMax(std::max(0, idxMax));
+                }
+            }
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Filter by vertex count");
+            ImGui::TableNextColumn();
+            bool matchVtx = group->getMatchVertexCount();
+            if (ImGui::Checkbox("##MatchVtx", &matchVtx)) {
+                group->setMatchVertexCount(matchVtx);
+            }
+            if (matchVtx) {
+                ImGui::SameLine();
+                int vtxMin = static_cast<int>(group->getVertexCountMin());
+                int vtxMax = static_cast<int>(group->getVertexCountMax());
+                ImGui::SetNextItemWidth(70.0f);
+                if (ImGui::InputInt("Min##Vtx", &vtxMin, 0)) {
+                    group->setVertexCountMin(std::max(0, vtxMin));
+                }
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(70.0f);
+                if (ImGui::InputInt("Max##Vtx", &vtxMax, 0)) {
+                    group->setVertexCountMax(std::max(0, vtxMax));
+                }
+            }
 
             ImGui::EndTable();
         }
@@ -989,6 +1037,60 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
 
                 ImGui::Separator();
 
+                // Live draw call stats for active hunted shader
+                const auto observedDraws = selectedShaderManager->getObservedDrawGeometries();
+                if (!observedDraws.empty()) {
+                    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Observed Draws for Active Shader (%zu):", observedDraws.size());
+                    for (size_t di = 0; di < observedDraws.size(); di++) {
+                        const auto& d = observedDraws[di];
+                        ImGui::BulletText("%s: %u %s (inst: %u, x%u)",
+                            d.isIndexed ? "Indexed" : "Non-idx",
+                            d.count,
+                            d.isIndexed ? "idx" : "vtx",
+                            d.instanceCount,
+                            d.invocations);
+                        ImGui::SameLine();
+                        std::string btnLabel = "Set Filter##" + std::to_string(di);
+                        if (ImGui::SmallButton(btnLabel.c_str())) {
+                            if (d.isIndexed) {
+                                group->setMatchIndexCount(true);
+                                group->setIndexCountMin(d.count);
+                                group->setIndexCountMax(d.count);
+                                group->setMatchVertexCount(false);
+                            } else {
+                                group->setMatchVertexCount(true);
+                                group->setVertexCountMin(d.count);
+                                group->setVertexCountMax(d.count);
+                                group->setMatchIndexCount(false);
+                            }
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("Lock group geometry filter to exactly %u %s.", d.count, d.isIndexed ? "indices" : "vertices");
+                        }
+                    }
+                }
+                if (group->hasGeometryFilter()) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Group Filter: ");
+                    ImGui::SameLine();
+                    if (group->getMatchIndexCount()) {
+                        if (group->getIndexCountMin() == group->getIndexCountMax())
+                            ImGui::Text("Index = %u", group->getIndexCountMin());
+                        else
+                            ImGui::Text("Index [%u - %u]", group->getIndexCountMin(), group->getIndexCountMax());
+                    } else if (group->getMatchVertexCount()) {
+                        if (group->getVertexCountMin() == group->getVertexCountMax())
+                            ImGui::Text("Vertex = %u", group->getVertexCountMin());
+                        else
+                            ImGui::Text("Vertex [%u - %u]", group->getVertexCountMin(), group->getVertexCountMax());
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Clear Filter##Group")) {
+                        group->setMatchIndexCount(false);
+                        group->setMatchVertexCount(false);
+                        group->setMatchInstanceCount(false);
+                    }
+                }
+
                 DisplayGroupView(instance, resManager, runtime, group, selectedShaderManager);
 
                 ImGui::PopStyleVar();
@@ -1365,6 +1467,67 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
                 }
                 ImGui::SameLine();
                 ShowHelpMarker("When enabled and this group is active, draw calls using this group's shaders are suppressed directly on the GPU, hiding elements (like HUD/UI) without requiring ReShade effects.");
+
+                // Geometry / Refine Filters
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("Filter by index count");
+                ImGui::SameLine(ImGui::GetWindowWidth() * 0.2f);
+                bool matchIdx = group.getMatchIndexCount();
+                if (ImGui::Checkbox("##MatchIdx", &matchIdx)) {
+                    group.setMatchIndexCount(matchIdx);
+                }
+                if (matchIdx) {
+                    ImGui::SameLine();
+                    int idxMin = static_cast<int>(group.getIndexCountMin());
+                    int idxMax = static_cast<int>(group.getIndexCountMax());
+                    ImGui::SetNextItemWidth(80.0f);
+                    if (ImGui::InputInt("Min##Idx", &idxMin, 0)) {
+                        group.setIndexCountMin(std::max(0, idxMin));
+                    }
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(80.0f);
+                    if (ImGui::InputInt("Max##Idx", &idxMax, 0)) {
+                        group.setIndexCountMax(std::max(0, idxMax));
+                    }
+                    ImGui::SameLine();
+                    ShowHelpMarker("Only match indexed draw calls within this index count range. Set Min == Max for exact match, or Max = 0 for unlimited.");
+                }
+
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("Filter by vertex count");
+                ImGui::SameLine(ImGui::GetWindowWidth() * 0.2f);
+                bool matchVtx = group.getMatchVertexCount();
+                if (ImGui::Checkbox("##MatchVtx", &matchVtx)) {
+                    group.setMatchVertexCount(matchVtx);
+                }
+                if (matchVtx) {
+                    ImGui::SameLine();
+                    int vtxMin = static_cast<int>(group.getVertexCountMin());
+                    int vtxMax = static_cast<int>(group.getVertexCountMax());
+                    ImGui::SetNextItemWidth(80.0f);
+                    if (ImGui::InputInt("Min##Vtx", &vtxMin, 0)) {
+                        group.setVertexCountMin(std::max(0, vtxMin));
+                    }
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(80.0f);
+                    if (ImGui::InputInt("Max##Vtx", &vtxMax, 0)) {
+                        group.setVertexCountMax(std::max(0, vtxMax));
+                    }
+                    ImGui::SameLine();
+                    ShowHelpMarker("Only match non-indexed draw calls within this vertex count range. Set Min == Max for exact match, or Max = 0 for unlimited.");
+                }
+
+                if (group.hasGeometryFilter()) {
+                    if (ImGui::Button("Clear Geometry Filters")) {
+                        group.setMatchIndexCount(false);
+                        group.setMatchVertexCount(false);
+                        group.setMatchInstanceCount(false);
+                        group.setIndexCountMin(0);
+                        group.setIndexCountMax(0);
+                        group.setVertexCountMin(0);
+                        group.setVertexCountMax(0);
+                    }
+                }
 
                 if (ImGui::Button("OK")) {
                     group.setEditing(false);

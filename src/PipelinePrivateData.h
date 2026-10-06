@@ -59,10 +59,20 @@ struct __declspec(uuid("222F7169-3C09-40DB-9BC9-EC53842CE537")) CommandListDataC
     ShaderData vs{ 1 };
     ShaderData cs{ 2 };
 
+    bool hasDrawGeometry = false;
+    bool isIndexedDraw = false;
+    uint32_t currentDrawCount = 0;
+    uint32_t currentInstanceCount = 1;
+
     void Reset() {
         ps.Reset();
         vs.Reset();
         cs.Reset();
+
+        hasDrawGeometry = false;
+        isIndexedDraw = false;
+        currentDrawCount = 0;
+        currentInstanceCount = 1;
 
         commandQueue = 0;
     }

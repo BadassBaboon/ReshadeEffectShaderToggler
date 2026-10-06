@@ -42,6 +42,17 @@
 #include <unordered_set>
 
 namespace ShaderToggler {
+struct DrawGeometryStats {
+    bool isIndexed = false;
+    uint32_t count = 0;
+    uint32_t instanceCount = 0;
+    uint32_t invocations = 0;
+
+    bool operator==(const DrawGeometryStats& other) const {
+        return isIndexed == other.isIndexed && count == other.count && instanceCount == other.instanceCount;
+    }
+};
+
 /// <summary>
 /// Class which manages a set of shaders for a given type (pixel, vertex...)
 /// </summary>
@@ -147,6 +158,10 @@ class ShaderManager {
         return it == _handleToShaderHash.end() ? 0 : it->second;
     }
 
+    void recordDrawGeometry(uint32_t shaderHash, bool isIndexed, uint32_t count, uint32_t instanceCount);
+    std::vector<DrawGeometryStats> getObservedDrawGeometries() const;
+    void clearObservedDrawGeometries();
+
   private:
     void setActiveHuntedShaderHandle();
 
@@ -166,5 +181,8 @@ class ShaderManager {
     std::shared_mutex _markedShaderHashMutex;
     bool _hideMarkedShaders = false;
     bool _hideHuntedShader = false;
+
+    std::vector<DrawGeometryStats> _observedDrawGeometries;
+    mutable std::shared_mutex _drawGeometryMutex;
 };
 }

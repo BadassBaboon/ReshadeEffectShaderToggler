@@ -116,6 +116,15 @@ ToggleGroup::ToggleGroup(const ToggleGroup& other)
     _flipBuffer = other._flipBuffer;
     _flipBufferBinding = other._flipBufferBinding;
     _suppressDrawCall = other._suppressDrawCall;
+    _matchVertexCount = other._matchVertexCount;
+    _vertexCountMin = other._vertexCountMin;
+    _vertexCountMax = other._vertexCountMax;
+    _matchIndexCount = other._matchIndexCount;
+    _indexCountMin = other._indexCountMin;
+    _indexCountMax = other._indexCountMax;
+    _matchInstanceCount = other._matchInstanceCount;
+    _instanceCountMin = other._instanceCountMin;
+    _instanceCountMax = other._instanceCountMax;
     _matchSwapchainResolution = other._matchSwapchainResolution;
     _bindingMatchSwapchainResolution = other._bindingMatchSwapchainResolution;
     _requeueAfterRTMatchingFailure = other._requeueAfterRTMatchingFailure;
@@ -304,6 +313,15 @@ void ToggleGroup::saveState(CDataFile& iniFile, int groupCounter) const {
     iniFile.SetBool("PreserveTargetAlphaChannel", _preserveAlpha, "", sectionRoot);
     iniFile.SetBool("FlipBuffer", _flipBuffer, "", sectionRoot);
     iniFile.SetBool("SuppressDrawCall", _suppressDrawCall, "", sectionRoot);
+    iniFile.SetBool("MatchVertexCount", _matchVertexCount, "", sectionRoot);
+    iniFile.SetUInt("VertexCountMin", _vertexCountMin, "", sectionRoot);
+    iniFile.SetUInt("VertexCountMax", _vertexCountMax, "", sectionRoot);
+    iniFile.SetBool("MatchIndexCount", _matchIndexCount, "", sectionRoot);
+    iniFile.SetUInt("IndexCountMin", _indexCountMin, "", sectionRoot);
+    iniFile.SetUInt("IndexCountMax", _indexCountMax, "", sectionRoot);
+    iniFile.SetBool("MatchInstanceCount", _matchInstanceCount, "", sectionRoot);
+    iniFile.SetUInt("InstanceCountMin", _instanceCountMin, "", sectionRoot);
+    iniFile.SetUInt("InstanceCountMax", _instanceCountMax, "", sectionRoot);
 }
 
 static std::vector<std::string> split(std::string& str, char delimiter) {
@@ -543,5 +561,23 @@ void ToggleGroup::loadState(CDataFile& iniFile, int groupCounter) {
     _flipBufferBinding = iniFile.GetBoolOrDefault("FlipBufferBinding", sectionRoot, false);
 
     _suppressDrawCall = iniFile.GetBoolOrDefault("SuppressDrawCall", sectionRoot, false);
+
+    _matchVertexCount = iniFile.GetBoolOrDefault("MatchVertexCount", sectionRoot, false);
+    uint32_t vMin = iniFile.GetUInt("VertexCountMin", sectionRoot);
+    _vertexCountMin = (vMin == UINT_MAX) ? 0 : vMin;
+    uint32_t vMax = iniFile.GetUInt("VertexCountMax", sectionRoot);
+    _vertexCountMax = (vMax == UINT_MAX) ? 0 : vMax;
+
+    _matchIndexCount = iniFile.GetBoolOrDefault("MatchIndexCount", sectionRoot, false);
+    uint32_t iMin = iniFile.GetUInt("IndexCountMin", sectionRoot);
+    _indexCountMin = (iMin == UINT_MAX) ? 0 : iMin;
+    uint32_t iMax = iniFile.GetUInt("IndexCountMax", sectionRoot);
+    _indexCountMax = (iMax == UINT_MAX) ? 0 : iMax;
+
+    _matchInstanceCount = iniFile.GetBoolOrDefault("MatchInstanceCount", sectionRoot, false);
+    uint32_t instMin = iniFile.GetUInt("InstanceCountMin", sectionRoot);
+    _instanceCountMin = (instMin == UINT_MAX) ? 0 : instMin;
+    uint32_t instMax = iniFile.GetUInt("InstanceCountMax", sectionRoot);
+    _instanceCountMax = (instMax == UINT_MAX) ? 0 : instMax;
 }
 }
