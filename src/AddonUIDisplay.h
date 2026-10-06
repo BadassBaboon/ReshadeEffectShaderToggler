@@ -163,14 +163,45 @@ static bool DrawToggleSwitch(const char* id, bool* v) {
     return clicked;
 }
 
-static bool DrawTableToggleSwitch(const char* id, bool* v) {
+static bool DrawTableToggleSwitch(const char* id, bool* v, float rightPad = 8.0f) {
     float avail = ImGui::GetContentRegionAvail().x;
     float height = ImGui::GetFrameHeight() * 0.70f;
     float switch_w = height * 1.85f;
-    if (avail > switch_w) {
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - switch_w);
+    if (avail > switch_w + rightPad) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - switch_w - rightPad);
     }
     return DrawToggleSwitch(id, v);
+}
+
+template <typename Getter, typename Setter>
+static void DrawTableStepper(const char* id_suffix, Getter getVal, Setter setVal, uint32_t minVal = 0, float rightPad = 8.0f) {
+    char valBuf[16];
+    uint32_t val = getVal();
+    snprintf(valBuf, sizeof(valBuf), "%u", val);
+    const float textW = ImGui::CalcTextSize(valBuf).x;
+    const float btnW = ImGui::GetFrameHeight();
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    const float totalW = textW + btnW * 2.0f + spacing * 2.0f;
+    const float avail = ImGui::GetContentRegionAvail().x;
+    if (avail > totalW + rightPad) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - totalW - rightPad);
+    }
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(valBuf);
+    ImGui::SameLine();
+    if (val <= minVal) ImGui::BeginDisabled();
+    char decId[32];
+    snprintf(decId, sizeof(decId), "-##dec_%s", id_suffix);
+    if (ImGui::Button(decId, ImVec2(btnW, 0))) {
+        setVal(val - 1);
+    }
+    if (val <= minVal) ImGui::EndDisabled();
+    ImGui::SameLine();
+    char incId[32];
+    snprintf(incId, sizeof(incId), "+##inc_%s", id_suffix);
+    if (ImGui::Button(incId, ImVec2(btnW, 0))) {
+        setVal(val + 1);
+    }
 }
 
 static bool DrawToggleRow(const char* label, bool* v, const char* tooltip = nullptr, const char* subtext = nullptr, float rightPad = RFX_CARD_PAD) {
@@ -408,7 +439,7 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
 
     if (BeginCard("##tech_mode_card", "TECHNIQUE ROUTING MODE")) {
         const float labelColWidth = std::max(220.0f, ImGui::CalcTextSize("Except for selected techniques   ").x);
-        if (ImGui::BeginTable("TechniqueModeTable", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
+        if (ImGui::BeginTable("TechniqueModeTable", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody, ImVec2(-RFX_CARD_PAD, 0.0f))) {
             ImGui::TableSetupColumn("##col_label", ImGuiTableColumnFlags_WidthFixed, labelColWidth);
             ImGui::TableSetupColumn("##col_ctrl", ImGuiTableColumnFlags_WidthStretch);
 
@@ -440,15 +471,15 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
             if (!allowAll) {
                 ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), "INCLUSION LIST");
                 ImGui::SameLine();
-                ImGui::TextDisabled("— Only checked techniques trigger for this group");
+                ImGui::TextDisabled("- Only checked techniques trigger for this group");
             } else if (exceptions) {
                 ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f), "EXCLUSION LIST");
                 ImGui::SameLine();
-                ImGui::TextDisabled("— All active techniques trigger EXCEPT checked ones");
+                ImGui::TextDisabled("- All active techniques trigger EXCEPT checked ones");
             } else {
                 ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "ALL ACTIVE TECHNIQUES (Passive)");
                 ImGui::SameLine();
-                ImGui::TextDisabled("— All globally enabled ReShade techniques apply");
+                ImGui::TextDisabled("- All globally enabled ReShade techniques apply");
             }
 
             ImGui::EndTable();
@@ -460,7 +491,7 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
 
     if (BeginCard("##tech_list_card", "AVAILABLE TECHNIQUES")) {
         // Search bar
-        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::SetNextItemWidth(-RFX_CARD_PAD);
         ImGui::InputTextWithHint("##techniqueSearch", "Search techniques by name...", searchBuf, IM_ARRAYSIZE(searchBuf));
 
         ImGui::Spacing();
@@ -470,8 +501,9 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
             ImGui::BeginDisabled();
         }
 
-        const float btnW = 95.0f;
-        if (ImGui::Button("Select All", ImVec2(btnW, 0))) {
+        const float selectAllW = ImGui::CalcTextSize("Select All").x + ImGui::GetStyle().FramePadding.x * 2.0f + 14.0f;
+        const float untickAllW = ImGui::CalcTextSize("Untick All").x + ImGui::GetStyle().FramePadding.x * 2.0f + 14.0f;
+        if (ImGui::Button("Select All", ImVec2(selectAllW, 0))) {
             std::shared_lock<std::shared_mutex> techLock(runtimeData.technique_mutex);
             auto updated = group->preferredTechniques();
             std::string searchUpper(searchBuf);
@@ -486,7 +518,7 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
             selectionChanged = true;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Untick All", ImVec2(btnW, 0))) {
+        if (ImGui::Button("Untick All", ImVec2(untickAllW, 0))) {
             if (searchBuf[0] == '\0') {
                 const std::unordered_set<std::string> empty;
                 group->setPreferredTechniques(empty);
@@ -506,18 +538,6 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
             selectionChanged = true;
         }
 
-        if (!canEditCheckboxes) {
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Switch to Exclusion Mode")) {
-                exceptions = true;
-                selectionChanged = true;
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Enables 'Except for selected techniques' so you can pick techniques to exclude.");
-            }
-        }
-
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("|  %zu selected / %zu available", group->preferredTechniques().size(), availableCount);
@@ -525,12 +545,7 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
         ImGui::Separator();
 
         const float tableH = std::max(120.0f, ImGui::GetContentRegionAvail().y - 8.0f);
-        const float availW = ImGui::GetContentRegionAvail().x;
-        const int numCols = (availW > 640.0f) ? 2 : 1;
-
-        if (!canEditCheckboxes) {
-            ImGui::BeginDisabled();
-        }
+        const int numCols = 1;
 
         std::string searchUpper(searchBuf);
         std::transform(searchUpper.begin(), searchUpper.end(), searchUpper.begin(),
@@ -544,10 +559,8 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
             } else {
                 if (ImGui::BeginTable("TechniqueSelectionTable", numCols,
                                       ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerV,
-                                      ImVec2(0.0f, tableH))) {
-                    for (int c = 0; c < numCols; ++c) {
-                        ImGui::TableSetupColumn(nullptr, ImGuiTableColumnFlags_WidthStretch);
-                    }
+                                      ImVec2(-RFX_CARD_PAD, tableH))) {
+                    ImGui::TableSetupColumn(nullptr, ImGuiTableColumnFlags_WidthStretch);
 
                     int matchCount = 0;
                     for (const auto& entry : runtimeData.techniqueUiCache) {
@@ -632,132 +645,103 @@ static void DisplayPreview(AddonImGui::AddonUIData& instance,
                            reshade::api::effect_runtime* runtime,
                            ShaderToggler::ToggleGroup* group,
                            float width = 0) {
-    if (ImGui::BeginChild("RTPreview##child", { width, 0 }, true, ImGuiWindowFlags_None)) {
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
+    DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
+    reshade::api::resource_view srv = reshade::api::resource_view{ 0 };
+    resManager.SetPongPreviewHandles(runtime->get_device(), nullptr, nullptr, &srv);
+    bool clearAlpha = group->getClearPreviewAlpha();
+    const bool vulkan = runtime->get_device()->get_api() == reshade::api::device_api::vulkan;
 
-        DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
-        reshade::api::resource_view srv = reshade::api::resource_view{ 0 };
-        resManager.SetPongPreviewHandles(runtime->get_device(), nullptr, nullptr, &srv);
-        bool clearAlpha = group->getClearPreviewAlpha();
-        const bool vulkan = runtime->get_device()->get_api() == reshade::api::device_api::vulkan;
+    if (vulkan)
+        ImGui::BeginDisabled();
+    DrawToggleRow("Clear alpha channel", &clearAlpha,
+                  vulkan ? "Vulkan safe preview currently copies the source image directly." : "Clear alpha channel before sampling preview texture",
+                  nullptr, RFX_CARD_PAD);
+    if (vulkan)
+        ImGui::EndDisabled();
 
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Clear alpha channel");
-        const float switch_w = ImGui::GetFrameHeight() * 0.70f * 1.85f;
-        const float avail = ImGui::GetContentRegionAvail().x;
-        if (avail > switch_w) {
-            ImGui::SameLine(ImGui::GetCursorPosX() + avail - switch_w);
-        } else {
-            ImGui::SameLine();
-        }
-        if (vulkan)
-            ImGui::BeginDisabled();
-        DrawToggleSwitch("##Clearalpha", &clearAlpha);
-        if (vulkan) {
-            ImGui::EndDisabled();
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Vulkan safe preview currently copies the source image directly.");
-        }
-
-        if (!deviceData.huntPreview.status.empty()) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("%s", deviceData.huntPreview.status.c_str());
-        }
-
-        if (deviceData.huntPreview.target != 0) {
-            const char* stageName = deviceData.huntPreview.hunted_stage == 0 ? "PS" :
-                                    deviceData.huntPreview.hunted_stage == 1 ? "VS" : "CS";
-            ImGui::Text("Shader: 0x%08x (%s)", deviceData.huntPreview.hunted_shader_hash, stageName);
-            ImGui::SameLine();
-            ImGui::Text("Target: %ux%u", deviceData.huntPreview.width, deviceData.huntPreview.height);
-            ImGui::SameLine();
-            ImGui::Text("Format: %s", Rendering::RenderingManager::FormatName(deviceData.huntPreview.format).c_str());
-            ImGui::SameLine();
-            ImGui::Text("Address: 0x%llx", static_cast<unsigned long long>(deviceData.huntPreview.target.handle));
-            ImGui::Separator();
-        }
-
-        int& previewChannel = instance.GetHuntingUIState().previewChannel;
-        if (srv != 0 && deviceData.huntPreview.matched) {
-            ImGui::TextDisabled("View");
-            ImGui::SameLine();
-            ImGui::RadioButton("RGB", &previewChannel, 0);
-            ImGui::SameLine();
-            ImGui::RadioButton("R", &previewChannel, 1);
-            ImGui::SameLine();
-            ImGui::RadioButton("G", &previewChannel, 2);
-            ImGui::SameLine();
-            ImGui::RadioButton("B", &previewChannel, 3);
-
-            const ImVec4 previewTint =
-              previewChannel == 1 ? ImVec4(1.0f, 0.0f, 0.0f, 1.0f) :
-              previewChannel == 2 ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) :
-              previewChannel == 3 ? ImVec4(0.0f, 0.0f, 1.0f, 1.0f) :
-                                    ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-
-            if (ImGui::BeginChild("RTPreview##preview", { 0, 0 }, false, ImGuiWindowFlags_None)) {
-                DrawPreview(srv.handle, deviceData.huntPreview.width, deviceData.huntPreview.height, previewTint);
-            }
-            ImGui::EndChild();
-        } else if (vulkan && ImGui::BeginChild("RTPreview##preview", { 0, 0 }, false, ImGuiWindowFlags_None)) {
-            if (deviceData.huntPreview.status.empty())
-                ImGui::TextDisabled("Select a shader while hunting to capture a Vulkan preview.");
-            else
-                ImGui::TextDisabled("%s", deviceData.huntPreview.status.c_str());
-            ImGui::EndChild();
-        }
-
-        group->setClearPreviewAlpha(clearAlpha);
-
-        ImGui::PopStyleVar();
+    if (!deviceData.huntPreview.status.empty()) {
+        ImGui::TextDisabled("%s", deviceData.huntPreview.status.c_str());
     }
-    ImGui::EndChild();
+
+    if (deviceData.huntPreview.target != 0) {
+        const char* stageName = deviceData.huntPreview.hunted_stage == 0 ? "PS" :
+                                deviceData.huntPreview.hunted_stage == 1 ? "VS" : "CS";
+        ImGui::Text("Shader: 0x%08x (%s)", deviceData.huntPreview.hunted_shader_hash, stageName);
+        ImGui::SameLine();
+        ImGui::Text("Target: %ux%u", deviceData.huntPreview.width, deviceData.huntPreview.height);
+        ImGui::SameLine();
+        ImGui::Text("Format: %s", Rendering::RenderingManager::FormatName(deviceData.huntPreview.format).c_str());
+        ImGui::SameLine();
+        ImGui::Text("Address: 0x%llx", static_cast<unsigned long long>(deviceData.huntPreview.target.handle));
+        ImGui::Separator();
+    }
+
+    int& previewChannel = instance.GetHuntingUIState().previewChannel;
+    if (srv != 0 && deviceData.huntPreview.matched) {
+        ImGui::TextDisabled("View:");
+        ImGui::SameLine();
+        ImGui::RadioButton("RGB", &previewChannel, 0);
+        ImGui::SameLine();
+        ImGui::RadioButton("R", &previewChannel, 1);
+        ImGui::SameLine();
+        ImGui::RadioButton("G", &previewChannel, 2);
+        ImGui::SameLine();
+        ImGui::RadioButton("B", &previewChannel, 3);
+
+        const ImVec4 previewTint =
+          previewChannel == 1 ? ImVec4(1.0f, 0.0f, 0.0f, 1.0f) :
+          previewChannel == 2 ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) :
+          previewChannel == 3 ? ImVec4(0.0f, 0.0f, 1.0f, 1.0f) :
+                                ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+
+        if (ImGui::BeginChild("RTPreview##preview", ImVec2(0, 240.0f), true, ImGuiWindowFlags_None)) {
+            DrawPreview(srv.handle, deviceData.huntPreview.width, deviceData.huntPreview.height, previewTint);
+        }
+        ImGui::EndChild();
+    } else {
+        ImGui::Spacing();
+        ImGui::TextDisabled(vulkan ?
+            (deviceData.huntPreview.status.empty() ? "Select a shader while hunting to capture a Vulkan preview." : deviceData.huntPreview.status.c_str()) :
+            "Select a shader in the hunting list to capture a live render target preview.");
+    }
+
+    group->setClearPreviewAlpha(clearAlpha);
 }
 
 static void DisplayBindingPreview(AddonImGui::AddonUIData& instance,
                                   Rendering::ResourceManager& resManager,
                                   reshade::api::effect_runtime* runtime,
                                   ShaderToggler::ToggleGroup* group) {
-    if (ImGui::BeginChild("BindingPreview##child", { 0, 0 }, true, ImGuiWindowFlags_None)) {
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
+    ShaderToggler::GroupResource& groupResource = group->GetGroupResource(ShaderToggler::GroupResourceType::RESOURCE_BINDING);
 
-        DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
-        ShaderToggler::GroupResource& groupResource = group->GetGroupResource(ShaderToggler::GroupResourceType::RESOURCE_BINDING);
-
-        reshade::api::resource_view res_view = { 0 };
-        if (groupResource.owning) {
-            res_view = groupResource.srv;
-        } else if (groupResource.g_res != nullptr) {
-            res_view = groupResource.g_res->srv;
-        }
-
-        if (res_view != 0) {
-            ImGui::Text(std::format("Format: {} ", static_cast<uint32_t>(groupResource.target_description.texture.format)).c_str());
-            ImGui::SameLine();
-            ImGui::Text(std::format("Width: {} ", groupResource.target_description.texture.width).c_str());
-            ImGui::SameLine();
-            ImGui::Text(std::format("Height: {} ", groupResource.target_description.texture.height).c_str());
-            ImGui::Separator();
-
-            if (ImGui::BeginChild("BindingPreview##preview", { 0, 0 }, false, ImGuiWindowFlags_None)) {
-                DrawPreview(res_view.handle, groupResource.target_description.texture.width, groupResource.target_description.texture.height);
-            }
-            ImGui::EndChild();
-        }
-
-        ImGui::PopStyleVar();
+    reshade::api::resource_view res_view = { 0 };
+    if (groupResource.owning) {
+        res_view = groupResource.srv;
+    } else if (groupResource.g_res != nullptr) {
+        res_view = groupResource.g_res->srv;
     }
-    ImGui::EndChild();
+
+    if (res_view != 0) {
+        ImGui::Text("Format: %u | Width: %u | Height: %u",
+                    static_cast<uint32_t>(groupResource.target_description.texture.format),
+                    groupResource.target_description.texture.width,
+                    groupResource.target_description.texture.height);
+        ImGui::Separator();
+
+        if (ImGui::BeginChild("BindingPreview##preview", ImVec2(0, 240.0f), true, ImGuiWindowFlags_None)) {
+            DrawPreview(res_view.handle, groupResource.target_description.texture.width, groupResource.target_description.texture.height);
+        }
+        ImGui::EndChild();
+    } else {
+        ImGui::Spacing();
+        ImGui::TextDisabled("No texture is currently captured or bound for this group.");
+    }
 }
 
 static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
                                  Rendering::ResourceManager& resManager,
                                  reshade::api::effect_runtime* runtime,
                                  ShaderToggler::ToggleGroup* group) {
-    const float totalAvailH = ImGui::GetContentRegionAvail().y;
-    static float splitRatio = 0.55f;
-    float topHeight = std::clamp(totalAvailH * splitRatio, 140.0f, std::max(140.0f, totalAvailH - 100.0f));
-
     const char* typeSelectedItem = invocationDescription[group->getInvocationLocation()];
     uint32_t selectedIndex = group->getInvocationLocation();
 
@@ -783,12 +767,14 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
     const bool autoSceneColourSupported = ShaderToggler::IsAutoSceneColourSupported(deviceApi);
     const bool supportsSRVwrite = deviceApi < reshade::api::device_api::d3d12;
 
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-    if (ImGui::BeginChild("RenderTargets", { 0, topHeight }, true)) {
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
+    const bool autoSceneColourActive = autoSceneColour && autoSceneColourSupported;
+    const bool pendingVulkanShaderEdits =
+      deviceApi == reshade::api::device_api::vulkan &&
+      instance.GetToggleGroupIdShaderEditing().load() == group->getId();
 
+    if (BeginCard("##rt_config_card", "RENDER TARGET CONFIGURATION")) {
         const float labelColWidth = std::max(220.0f, ImGui::CalcTextSize("Preserve target alpha channel   ").x);
-        if (ImGui::BeginTable("RenderTargetsSettings", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
+        if (ImGui::BeginTable("RenderTargetsSettings", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody, ImVec2(-RFX_CARD_PAD, 0.0f))) {
             ImGui::TableSetupColumn("##RTcolumnsetup", ImGuiTableColumnFlags_WidthFixed, labelColWidth);
             ImGui::TableSetupColumn("##RTcontrols", ImGuiTableColumnFlags_WidthStretch);
 
@@ -807,11 +793,6 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
                 ImGui::SetTooltip("Auto Scene Colour supports D3D10, D3D11, D3D12 and Vulkan. Vulkan native staging uses ReShade\'s generic image-blit path.");
             }
-
-            const bool autoSceneColourActive = autoSceneColour && autoSceneColourSupported;
-            const bool pendingVulkanShaderEdits =
-              deviceApi == reshade::api::device_api::vulkan &&
-              instance.GetToggleGroupIdShaderEditing().load() == group->getId();
 
             ImGui::TableNextRow();
 
@@ -909,29 +890,15 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextUnformatted("Diagnostics");
                 ImGui::TableNextColumn();
-                const float copyBtnW = ImGui::CalcTextSize("Copy diagnostics").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+                const float copyBtnW = ImGui::CalcTextSize("Copy diagnostics").x + ImGui::GetStyle().FramePadding.x * 2.0f + 14.0f;
                 if (ImGui::GetContentRegionAvail().x > copyBtnW)
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - copyBtnW);
-                if (ImGui::Button("Copy diagnostics")) {
+                if (ImGui::Button("Copy diagnostics", ImVec2(copyBtnW, 0))) {
                     const char* apiName = deviceApi == reshade::api::device_api::d3d10 ? "D3D10" :
                                           deviceApi == reshade::api::device_api::d3d11 ? "D3D11" :
                                           deviceApi == reshade::api::device_api::d3d12 ? "D3D12" : "Vulkan";
                     const std::string diagnostics = std::format(
-                      "REST {}\n"
-                      "Group: {}\n"
-                      "API: {}\n"
-                      "Auto Scene Colour: active\n"
-                      "\nCurrent candidate / latest attempt\n"
-                      "Status: {}\n"
-                      "Target: {}x{} | {} | 0x{:x}\n"
-                      "\nLast successful injection\n"
-                      "Scene -> effect: {}x{} -> {}x{}\n"
-                      "Staging path: {}\n"
-                      "Vulkan boundary: {}\n"
-                      "Techniques: {}\n"
-                      "Technique order: {}\n"
-                      "Successful renders: {}\n"
-                      "Last successful target: 0x{:x}",
+                      "REST {}\nGroup: {}\nAPI: {}\nAuto Scene Colour: active\n\nCurrent candidate / latest attempt\nStatus: {}\nTarget: {}x{} | {} | 0x{:x}\n\nLast successful injection\nScene -> effect: {}x{} -> {}x{}\nStaging path: {}\nVulkan boundary: {}\nTechniques: {}\nTechnique order: {}\nSuccessful renders: {}\nLast successful target: 0x{:x}",
                       REST_VERSION_STRING,
                       group->getName(),
                       apiName,
@@ -1045,50 +1012,18 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
                     ImGui::AlignTextToFramePadding();
                     ImGui::TextUnformatted("Slot");
                     ImGui::TableNextColumn();
-                    {
-                        const float btnW = ImGui::GetFrameHeight();
-                        const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
-                        if (ImGui::GetContentRegionAvail().x > totalW)
-                            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::Text("%u", group->getRenderSRVSlotIndex());
-                        ImGui::SameLine();
-                        ImGui::PushID(0);
-                        if (ImGui::Button("+##srv_slot_inc", ImVec2(btnW, 0)))
-                            group->setRenderSRVSlotIndex(group->getRenderSRVSlotIndex() + 1);
-                        ImGui::PopID();
-                        ImGui::SameLine();
-                        if (group->getRenderSRVSlotIndex() == 0) ImGui::BeginDisabled();
-                        if (ImGui::Button("-##srv_slot_dec", ImVec2(btnW, 0)))
-                            group->setRenderSRVSlotIndex(group->getRenderSRVSlotIndex() - 1);
-                        if (group->getRenderSRVSlotIndex() == 0) ImGui::EndDisabled();
-                    }
+                    DrawTableStepper("srv_slot",
+                        [&]() { return group->getRenderSRVSlotIndex(); },
+                        [&](uint32_t val) { group->setRenderSRVSlotIndex(val); });
 
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
                     ImGui::AlignTextToFramePadding();
                     ImGui::TextUnformatted("Binding");
                     ImGui::TableNextColumn();
-                    {
-                        const float btnW = ImGui::GetFrameHeight();
-                        const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
-                        if (ImGui::GetContentRegionAvail().x > totalW)
-                            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::Text("%u", group->getRenderSRVDescriptorIndex());
-                        ImGui::SameLine();
-                        ImGui::PushID(2);
-                        if (ImGui::Button("+##srv_bind_inc", ImVec2(btnW, 0)))
-                            group->setRenderSRVDescriptorIndex(group->getRenderSRVDescriptorIndex() + 1);
-                        ImGui::PopID();
-                        ImGui::SameLine();
-                        if (group->getRenderSRVDescriptorIndex() == 0) ImGui::BeginDisabled();
-                        ImGui::PushID(1);
-                        if (ImGui::Button("-##srv_bind_dec", ImVec2(btnW, 0)))
-                            group->setRenderSRVDescriptorIndex(group->getRenderSRVDescriptorIndex() - 1);
-                        ImGui::PopID();
-                        if (group->getRenderSRVDescriptorIndex() == 0) ImGui::EndDisabled();
-                    }
+                    DrawTableStepper("srv_bind",
+                        [&]() { return group->getRenderSRVDescriptorIndex(); },
+                        [&](uint32_t val) { group->setRenderSRVDescriptorIndex(val); });
 
                     if (!instance.GetTrackDescriptors())
                         ImGui::EndDisabled();
@@ -1099,22 +1034,9 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
                     ImGui::AlignTextToFramePadding();
                     ImGui::TextUnformatted("Render target index");
                     ImGui::TableNextColumn();
-                    {
-                        const float btnW = ImGui::GetFrameHeight();
-                        const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
-                        if (ImGui::GetContentRegionAvail().x > totalW)
-                            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::Text("%u", group->getRenderTargetIndex());
-                        ImGui::SameLine();
-                        if (ImGui::Button("+##rt_idx_inc", ImVec2(btnW, 0)))
-                            group->setRenderTargetIndex(group->getRenderTargetIndex() + 1);
-                        ImGui::SameLine();
-                        if (group->getRenderTargetIndex() == 0) ImGui::BeginDisabled();
-                        if (ImGui::Button("-##rt_idx_dec", ImVec2(btnW, 0)))
-                            group->setRenderTargetIndex(group->getRenderTargetIndex() - 1);
-                        if (group->getRenderTargetIndex() == 0) ImGui::EndDisabled();
-                    }
+                    DrawTableStepper("rt_idx",
+                        [&]() { return group->getRenderTargetIndex(); },
+                        [&](uint32_t val) { group->setRenderTargetIndex(val); });
 
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
@@ -1206,27 +1128,21 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
         group->setPreserveAlpha(preserveAlpha);
         group->setFlipBuffer(flipbuffer);
 
-        ImGui::PopStyleVar();
+        EndCard();
     }
-    ImGui::EndChild();
 
-    ImGui::PushID(4);
-    ImGui::Button("", ImVec2(-1, 8.0f));
-    ImGui::PopID();
-    if (ImGui::IsItemActive() && totalAvailH > 200.0f)
-        splitRatio = std::clamp(splitRatio + ImGui::GetIO().MouseDelta.y / totalAvailH, 0.2f, 0.85f);
+    ImGui::Spacing();
 
-    DisplayPreview(instance, resManager, runtime, group);
-
-    ImGui::PopStyleVar();
+    if (BeginCard("##rt_preview_card", "RENDER TARGET PREVIEW")) {
+        DisplayPreview(instance, resManager, runtime, group);
+        EndCard();
+    }
 }
 
 static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
                                    ShaderToggler::ToggleGroup* group,
                                    reshade::api::effect_runtime* runtime,
                                    Rendering::ResourceManager& resManager) {
-    static float height = ImGui::GetWindowHeight();
-
     const char* typeItems[] = { "Render target", "Shader Resource View" };
     uint32_t selectedIndex = group->getExtractResourceViews() ? 1 : 0;
     const char* typeSelectedItem = typeItems[selectedIndex];
@@ -1239,22 +1155,18 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
     uint32_t selectedStageIndex = group->getSRVShaderStage();
     const char* selectedStage = stageItems[selectedStageIndex];
 
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-    if (ImGui::BeginChild("Texture bindings viewer", { 0, height / 2.0f }, true, ImGuiChildFlags_AlwaysAutoResize)) {
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
+    char tmpBuffer[150] = {};
+    bool isBindingEnabled = group->isProvidingTextureBinding();
+    const std::string& bindingName = group->getTextureBindingName();
+    strncpy_s(tmpBuffer, 150, bindingName.c_str(), bindingName.size());
 
-        char tmpBuffer[150] = {};
-        bool isBindingEnabled = group->isProvidingTextureBinding();
+    bool copyBinding = group->getCopyTextureBinding();
+    bool clearBinding = group->getClearBindings();
+    bool flipBinding = group->getFlipBufferBinding();
 
-        const std::string& bindingName = group->getTextureBindingName();
-        strncpy_s(tmpBuffer, 150, bindingName.c_str(), bindingName.size());
-
-        bool copyBinding = group->getCopyTextureBinding();
-        bool clearBinding = group->getClearBindings();
-        bool flipBinding = group->getFlipBufferBinding();
-
+    if (BeginCard("##texture_config_card", "TEXTURE BINDING CONFIGURATION")) {
         const float labelColWidth = std::max(220.0f, ImGui::CalcTextSize("Create texture copy for binding   ").x);
-        if (ImGui::BeginTable("Bindingsettings", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
+        if (ImGui::BeginTable("Bindingsettings", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody, ImVec2(-RFX_CARD_PAD, 0.0f))) {
             ImGui::TableSetupColumn("##BindingColumnSetup", ImGuiTableColumnFlags_WidthFixed, labelColWidth);
             ImGui::TableSetupColumn("##BindingControls", ImGuiTableColumnFlags_WidthStretch);
 
@@ -1326,24 +1238,6 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
             ImGui::TableNextColumn();
             DrawTableToggleSwitch("##Clearbinding", &clearBinding);
 
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-
-            ImGui::EndTable();
-        }
-
-        group->setTextureBindingName(tmpBuffer);
-        group->setCopyTextureBinding(copyBinding);
-        group->setClearBindings(clearBinding);
-        group->setFlipBufferBinding(flipBinding);
-
-        ImGui::Separator();
-
-        const float srcLabelColWidth = std::max(220.0f, ImGui::CalcTextSize("Render target index   ").x);
-        if (ImGui::BeginTable("BindingSourcesettings", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
-            ImGui::TableSetupColumn("##BindingSourceColumnSetup", ImGuiTableColumnFlags_WidthFixed, srcLabelColWidth);
-            ImGui::TableSetupColumn("##BindingSourceControls", ImGuiTableColumnFlags_WidthStretch);
-
             if (selectedIndex == 1) {
                 if (!instance.GetTrackDescriptors()) {
                     ImGui::BeginDisabled();
@@ -1352,6 +1246,7 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
                     group->setExtractResourceViews(true);
                 }
 
+                ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextUnformatted("Shader Stage");
@@ -1372,59 +1267,43 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
                 group->setSRVShaderStage(selectedStageIndex);
 
                 ImGui::TableNextRow();
-
                 ImGui::TableNextColumn();
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextUnformatted("Slot");
                 ImGui::TableNextColumn();
-                {
-                    const float btnW = ImGui::GetFrameHeight();
-                    const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
-                    if (ImGui::GetContentRegionAvail().x > totalW)
-                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::Text("%u", group->getBindingSRVSlotIndex());
-                    ImGui::SameLine();
-                    ImGui::PushID(0);
-                    if (ImGui::Button("+##bind_srv_slot_inc", ImVec2(btnW, 0))) {
-                        group->setBindingSRVSlotIndex(group->getBindingSRVSlotIndex() + 1);
-                    }
-                    ImGui::PopID();
-                    ImGui::SameLine();
-                    if (group->getBindingSRVSlotIndex() == 0) ImGui::BeginDisabled();
-                    if (ImGui::Button("-##bind_srv_slot_dec", ImVec2(btnW, 0))) {
-                        group->setBindingSRVSlotIndex(group->getBindingSRVSlotIndex() - 1);
-                    }
-                    if (group->getBindingSRVSlotIndex() == 0) ImGui::EndDisabled();
-                }
+                DrawTableStepper("bind_srv_slot",
+                    [&]() { return group->getBindingSRVSlotIndex(); },
+                    [&](uint32_t val) { group->setBindingSRVSlotIndex(val); });
 
                 ImGui::TableNextRow();
-
                 ImGui::TableNextColumn();
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextUnformatted("Binding");
                 ImGui::TableNextColumn();
                 {
+                    char valBuf[16];
+                    uint32_t val = group->getBindingSRVDescriptorIndex();
+                    snprintf(valBuf, sizeof(valBuf), "%u", val);
+                    const float textW = ImGui::CalcTextSize(valBuf).x;
                     const float btnW = ImGui::GetFrameHeight();
-                    const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
-                    if (ImGui::GetContentRegionAvail().x > totalW)
-                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::Text("%u", group->getBindingSRVDescriptorIndex());
-                    ImGui::SameLine();
-                    ImGui::PushID(2);
-                    if (ImGui::Button("+##bind_srv_desc_inc", ImVec2(btnW, 0))) {
-                        group->dispatchSRVCycle(ShaderToggler::CYCLE_UP);
+                    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+                    const float totalW = textW + btnW * 2.0f + spacing * 2.0f;
+                    const float avail = ImGui::GetContentRegionAvail().x;
+                    if (avail > totalW + 8.0f) {
+                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - totalW - 8.0f);
                     }
-                    ImGui::PopID();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted(valBuf);
                     ImGui::SameLine();
-                    if (group->getBindingSRVDescriptorIndex() == 0) ImGui::BeginDisabled();
-                    ImGui::PushID(1);
+                    if (val == 0) ImGui::BeginDisabled();
                     if (ImGui::Button("-##bind_srv_desc_dec", ImVec2(btnW, 0))) {
                         group->dispatchSRVCycle(ShaderToggler::CYCLE_DOWN);
                     }
-                    ImGui::PopID();
-                    if (group->getBindingSRVDescriptorIndex() == 0) ImGui::EndDisabled();
+                    if (val == 0) ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    if (ImGui::Button("+##bind_srv_desc_inc", ImVec2(btnW, 0))) {
+                        group->dispatchSRVCycle(ShaderToggler::CYCLE_UP);
+                    }
                 }
 
                 if (!instance.GetTrackDescriptors()) {
@@ -1436,33 +1315,16 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
                 const char* rtTypeSelectedItem = invocationDescription[group->getBindingInvocationLocation()];
                 uint32_t rtSelectedIndex = group->getBindingInvocationLocation();
 
+                ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextUnformatted("Render target index");
                 ImGui::TableNextColumn();
-                {
-                    const float btnW = ImGui::GetFrameHeight();
-                    const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
-                    if (ImGui::GetContentRegionAvail().x > totalW)
-                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::Text("%u", group->getBindingRenderTargetIndex());
-                    ImGui::SameLine();
-                    ImGui::PushID(0);
-                    if (ImGui::Button("+##bind_rt_idx_inc", ImVec2(btnW, 0))) {
-                        group->setBindingRenderTargetIndex(group->getBindingRenderTargetIndex() + 1);
-                    }
-                    ImGui::PopID();
-                    ImGui::SameLine();
-                    if (group->getBindingRenderTargetIndex() == 0) ImGui::BeginDisabled();
-                    if (ImGui::Button("-##bind_rt_idx_dec", ImVec2(btnW, 0))) {
-                        group->setBindingRenderTargetIndex(group->getBindingRenderTargetIndex() - 1);
-                    }
-                    if (group->getBindingRenderTargetIndex() == 0) ImGui::EndDisabled();
-                }
+                DrawTableStepper("bind_rt_idx",
+                    [&]() { return group->getBindingRenderTargetIndex(); },
+                    [&](uint32_t val) { group->setBindingRenderTargetIndex(val); });
 
                 ImGui::TableNextRow();
-
                 if (!copyBinding) {
                     ImGui::BeginDisabled();
                 }
@@ -1512,26 +1374,27 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
                 group->setBindingMatchSwapchainResolution(selectedSwapchainMatchMode);
             }
 
+            if (!isBindingEnabled) {
+                ImGui::EndDisabled();
+            }
+
             ImGui::EndTable();
         }
 
-        if (!isBindingEnabled) {
-            ImGui::EndDisabled();
-        }
+        group->setTextureBindingName(tmpBuffer);
+        group->setCopyTextureBinding(copyBinding);
+        group->setClearBindings(clearBinding);
+        group->setFlipBufferBinding(flipBinding);
 
-        ImGui::PopStyleVar();
+        EndCard();
     }
-    ImGui::EndChild();
 
-    ImGui::PushID(3);
-    ImGui::Button("", ImVec2(-1, 8.0f));
-    ImGui::PopID();
-    if (ImGui::IsItemActive())
-        height += ImGui::GetIO().MouseDelta.y;
+    ImGui::Spacing();
 
-    DisplayBindingPreview(instance, resManager, runtime, group);
-
-    ImGui::PopStyleVar();
+    if (BeginCard("##texture_preview_card", "TEXTURE PREVIEW")) {
+        DisplayBindingPreview(instance, resManager, runtime, group);
+        EndCard();
+    }
 }
 
 static void DisplayGroupView(AddonImGui::AddonUIData& instance,
@@ -1550,10 +1413,10 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
     int& filterMode = huntingUI.filterMode;
     const char* filterItems[] = { "All", "Marked", "Unmarked" };
 
-    if (ImGui::BeginTable("ShaderHuntSearch", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
+    const float filterColW = std::max(100.0f, ImGui::CalcTextSize("Unmarked").x + ImGui::GetStyle().FramePadding.x * 2.0f + 28.0f);
+    if (ImGui::BeginTable("ShaderHuntSearch", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
         ImGui::TableSetupColumn("Search", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Filter", ImGuiTableColumnFlags_WidthFixed, 120.0f);
-        ImGui::TableSetupColumn("Rescan", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+        ImGui::TableSetupColumn("Filter", ImGuiTableColumnFlags_WidthFixed, filterColW);
 
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1.0f);
@@ -1562,22 +1425,6 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::Combo("##shaderFilter", &filterMode, filterItems, IM_ARRAYSIZE(filterItems));
-
-        ImGui::TableNextColumn();
-        if (ImGui::Button("Rescan", ImVec2(-1.0f, 0))) {
-            auto* pixelManager = instance.GetPixelShaderManager();
-            auto* vertexManager = instance.GetVertexShaderManager();
-            auto* computeManager = instance.GetComputeShaderManager();
-            pixelManager->startHuntingMode(pixelManager->getMarkedShaderHashes());
-            vertexManager->startHuntingMode(vertexManager->getMarkedShaderHashes());
-            computeManager->startHuntingMode(computeManager->getMarkedShaderHashes());
-            *instance.ActiveCollectorFrameCounter() = *instance.StartValueFramecountCollectionPhase();
-            instance.UpdateToggleGroupsForShaderHashes();
-            ImGui::EndTable();
-            return;
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Recollect active shaders for the configured number of frames.");
 
         ImGui::EndTable();
     }
@@ -1856,41 +1703,63 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
             if (ImGui::BeginChild("GroupView", { huntingUIState.shaderPaneWidth, 0 }, true, ImGuiWindowFlags_NoScrollbar)) {
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
 
-                ImGui::PushItemWidth(ImGui::GetWindowWidth() - ImGui::GetStyle().FramePadding.x * 2 - ImGui::GetStyle().ItemSpacing.x * 2);
-                if (ImGui::BeginCombo("##shaderType", typeSelectedItem, ImGuiComboFlags_None)) {
-                    for (int n = 0; n < IM_ARRAYSIZE(typeItems); n++) {
-                        bool is_selected = (typeSelectedItem == typeItems[n]);
-                        if (ImGui::Selectable(typeItems[n], is_selected)) {
-                            if (n != selectedIndex) {
-                                switch (n) {
-                                    case 0: {
-                                        instance.GetVertexShaderManager()->resetActiveHuntedShader();
-                                        instance.GetComputeShaderManager()->resetActiveHuntedShader();
-                                    } break;
-                                    case 1: {
-                                        instance.GetPixelShaderManager()->resetActiveHuntedShader();
-                                        instance.GetComputeShaderManager()->resetActiveHuntedShader();
-                                    } break;
-                                    case 2: {
-                                        instance.GetPixelShaderManager()->resetActiveHuntedShader();
-                                        instance.GetVertexShaderManager()->resetActiveHuntedShader();
-                                    } break;
-                                    default:
-                                        break;
+                const float rescanBtnW = std::max(76.0f, ImGui::CalcTextSize("Rescan").x + ImGui::GetStyle().FramePadding.x * 2.0f + 14.0f);
+                if (ImGui::BeginTable("##shaderTypeRow", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
+                    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Rescan", ImGuiTableColumnFlags_WidthFixed, rescanBtnW);
+
+                    ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
+                    if (ImGui::BeginCombo("##shaderType", typeSelectedItem, ImGuiComboFlags_None)) {
+                        for (int n = 0; n < IM_ARRAYSIZE(typeItems); n++) {
+                            bool is_selected = (typeSelectedItem == typeItems[n]);
+                            if (ImGui::Selectable(typeItems[n], is_selected)) {
+                                if (n != selectedIndex) {
+                                    switch (n) {
+                                        case 0: {
+                                            instance.GetVertexShaderManager()->resetActiveHuntedShader();
+                                            instance.GetComputeShaderManager()->resetActiveHuntedShader();
+                                        } break;
+                                        case 1: {
+                                            instance.GetPixelShaderManager()->resetActiveHuntedShader();
+                                            instance.GetComputeShaderManager()->resetActiveHuntedShader();
+                                        } break;
+                                        case 2: {
+                                            instance.GetPixelShaderManager()->resetActiveHuntedShader();
+                                            instance.GetVertexShaderManager()->resetActiveHuntedShader();
+                                        } break;
+                                        default:
+                                            break;
+                                    }
+
+                                    instance.UpdateToggleGroupsForShaderHashes();
                                 }
 
-                                instance.UpdateToggleGroupsForShaderHashes();
+                                typeSelectedItem = typeItems[n];
+                                selectedIndex = n;
                             }
-
-                            typeSelectedItem = typeItems[n];
-                            selectedIndex = n;
+                            if (is_selected)
+                                ImGui::SetItemDefaultFocus();
                         }
-                        if (is_selected)
-                            ImGui::SetItemDefaultFocus();
+                        ImGui::EndCombo();
                     }
-                    ImGui::EndCombo();
+
+                    ImGui::TableNextColumn();
+                    if (ImGui::Button("Rescan", ImVec2(-1.0f, 0))) {
+                        auto* pixelManager = instance.GetPixelShaderManager();
+                        auto* vertexManager = instance.GetVertexShaderManager();
+                        auto* computeManager = instance.GetComputeShaderManager();
+                        pixelManager->startHuntingMode(pixelManager->getMarkedShaderHashes());
+                        vertexManager->startHuntingMode(vertexManager->getMarkedShaderHashes());
+                        computeManager->startHuntingMode(computeManager->getMarkedShaderHashes());
+                        *instance.ActiveCollectorFrameCounter() = *instance.StartValueFramecountCollectionPhase();
+                        instance.UpdateToggleGroupsForShaderHashes();
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Recollect active shaders for the configured number of frames.");
+
+                    ImGui::EndTable();
                 }
-                ImGui::PopItemWidth();
 
                 if (group->hasGeometryFilter()) {
                     ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Group Filter: ");
@@ -2964,28 +2833,28 @@ static void DisplayRestTab(AddonImGui::AddonUIData& instance, reshade::api::effe
     const ImVec2 status_sz = font->CalcTextSizeA(small_size, FLT_MAX, -1.0f, status_str);
     const ImU32 status_col = activeCount > 0 ? ImGui::ColorConvertFloat4ToU32(rfx_ok()) : rfx_u32(ImGuiCol_TextDisabled);
 
-    const float win_w = ImGui::GetWindowWidth();
-    const float pad_x = ImGui::GetStyle().WindowPadding.x;
-    const float right_x = ImGui::GetWindowPos().x + win_w - pad_x;
-    const float status_x = right_x - status_sz.x;
+    const float avail_w = ImGui::GetContentRegionAvail().x;
+    const float max_right_x = cur_x + avail_w - 6.0f;
+    const float status_x = max_right_x - status_sz.x;
 
-    const bool fits_one_line = (cur_x + title_sz.x + 10.0f + ver_sz.x + 16.0f <= status_x);
+    const bool fits_one_line = (cur_x + title_sz.x + 12.0f + ver_sz.x + 24.0f <= status_x);
 
+    float banner_h = 0.0f;
     if (fits_one_line) {
         draw->AddText(font, big_size, ImVec2(cur_x, banner_top_y), rfx_u32(ImGuiCol_Text), title_text);
         draw->AddText(font, small_size, ImVec2(cur_x + title_sz.x + 8.0f, banner_top_y + baseline_offset), rfx_u32(ImGuiCol_TextDisabled), ver_text.c_str());
         draw->AddText(font, small_size, ImVec2(status_x, banner_top_y + baseline_offset), status_col, status_str);
+        banner_h = title_sz.y + 10.0f;
     } else {
         draw->AddText(font, big_size, ImVec2(cur_x, banner_top_y), rfx_u32(ImGuiCol_Text), title_text);
-        const float line2_y = banner_top_y + title_sz.y + 3.0f;
+        const float line2_y = banner_top_y + title_sz.y + 4.0f;
         draw->AddText(font, small_size, ImVec2(cur_x, line2_y), rfx_u32(ImGuiCol_TextDisabled), ver_text.c_str());
-        if (cur_x + ver_sz.x + 16.0f <= status_x) {
-            draw->AddText(font, small_size, ImVec2(status_x, line2_y), status_col, status_str);
-        }
+        const float line2_status_x = (status_x > cur_x + ver_sz.x + 16.0f) ? status_x : (cur_x + ver_sz.x + 16.0f);
+        draw->AddText(font, small_size, ImVec2(line2_status_x, line2_y), status_col, status_str);
+        banner_h = title_sz.y + small_size + 16.0f;
     }
 
-    const float total_banner_h = fits_one_line ? (title_sz.y + 10.0f) : (title_sz.y + small_size + 14.0f);
-    ImGui::Dummy(ImVec2(0.0f, total_banner_h));
+    ImGui::Dummy(ImVec2(0.0f, banner_h));
     ImGui::Spacing();
 
     // Two-pane layout: Left Sidebar + Right Content Area
@@ -3059,7 +2928,7 @@ static void DisplayRestTab(AddonImGui::AddonUIData& instance, reshade::api::effe
         const float cat_size = base_font_size * 1.25f;
         const ImVec2 cat_sz = font->CalcTextSizeA(cat_size, FLT_MAX, -1.0f, cat_title);
         ImGui::GetWindowDrawList()->AddText(font, cat_size, cat_pos, rfx_u32(ImGuiCol_Text), cat_title);
-        ImGui::Dummy(ImVec2(0.0f, cat_sz.y + 6.0f));
+        ImGui::Dummy(ImVec2(0.0f, cat_sz.y + 14.0f));
         ImGui::Spacing();
 
         switch (s_currentRestCategory) {

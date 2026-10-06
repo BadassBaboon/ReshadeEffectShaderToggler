@@ -31,26 +31,9 @@ static void DisplayConstantSettings(ShaderToggler::ToggleGroup* group) {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Slot");
     ImGui::TableNextColumn();
-    {
-        const float btnW = ImGui::GetFrameHeight();
-        const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
-        if (ImGui::GetContentRegionAvail().x > totalW)
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
-        ImGui::AlignTextToFramePadding();
-        ImGui::Text("%u", group->getCBSlotIndex());
-        ImGui::SameLine();
-        ImGui::PushID(0);
-        if (ImGui::Button("+##cb_slot_inc", ImVec2(btnW, 0))) {
-            group->setCBSlotIndex(group->getCBSlotIndex() + 1);
-        }
-        ImGui::PopID();
-        ImGui::SameLine();
-        if (group->getCBSlotIndex() == 0) ImGui::BeginDisabled();
-        if (ImGui::Button("-##cb_slot_dec", ImVec2(btnW, 0))) {
-            group->setCBSlotIndex(group->getCBSlotIndex() - 1);
-        }
-        if (group->getCBSlotIndex() == 0) ImGui::EndDisabled();
-    }
+    DrawTableStepper("cb_slot",
+        [&]() { return group->getCBSlotIndex(); },
+        [&](uint32_t val) { group->setCBSlotIndex(val); });
 
     ImGui::TableNextRow();
 
@@ -59,26 +42,29 @@ static void DisplayConstantSettings(ShaderToggler::ToggleGroup* group) {
     ImGui::TextUnformatted("Binding");
     ImGui::TableNextColumn();
     {
+        char valBuf[16];
+        uint32_t val = group->getCBDescriptorIndex();
+        snprintf(valBuf, sizeof(valBuf), "%u", val);
+        const float textW = ImGui::CalcTextSize(valBuf).x;
         const float btnW = ImGui::GetFrameHeight();
-        const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
-        if (ImGui::GetContentRegionAvail().x > totalW)
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
-        ImGui::AlignTextToFramePadding();
-        ImGui::Text("%u", group->getCBDescriptorIndex());
-        ImGui::SameLine();
-        ImGui::PushID(2);
-        if (ImGui::Button("+##cb_desc_inc", ImVec2(btnW, 0))) {
-            group->dispatchCBCycle(ShaderToggler::CYCLE_UP);
+        const float spacing = ImGui::GetStyle().ItemSpacing.x;
+        const float totalW = textW + btnW * 2.0f + spacing * 2.0f;
+        const float avail = ImGui::GetContentRegionAvail().x;
+        if (avail > totalW + 8.0f) {
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - totalW - 8.0f);
         }
-        ImGui::PopID();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(valBuf);
         ImGui::SameLine();
-        if (group->getCBDescriptorIndex() == 0) ImGui::BeginDisabled();
-        ImGui::PushID(1);
+        if (val == 0) ImGui::BeginDisabled();
         if (ImGui::Button("-##cb_desc_dec", ImVec2(btnW, 0))) {
             group->dispatchCBCycle(ShaderToggler::CYCLE_DOWN);
         }
-        ImGui::PopID();
-        if (group->getCBDescriptorIndex() == 0) ImGui::EndDisabled();
+        if (val == 0) ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("+##cb_desc_inc", ImVec2(btnW, 0))) {
+            group->dispatchCBCycle(ShaderToggler::CYCLE_UP);
+        }
     }
 }
 
@@ -88,9 +74,6 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
     }
 
     std::shared_lock<std::shared_mutex> lock(instance.GetConstantHandler()->GetBufferMutex());
-
-    static float height = ImGui::GetWindowHeight();
-    static float width = ImGui::GetWindowWidth();
 
     const uint32_t columns = 4;
     const char* typeItems[] = { "byte", "float", "int", "uint" };
@@ -112,16 +95,14 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
     const char* selectedStage = stageItems[selectedStageIndex];
 
     bool extractionEnabled = group->getExtractConstants();
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-    if (ImGui::BeginChild("Constant Buffer Viewer##child", { 0, height / 1.5f }, true, ImGuiChildFlags_AlwaysAutoResize)) {
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
 
+    if (BeginCard("##cb_config_card", "CONSTANT BUFFER EXTRACTION")) {
         if (!instance.GetTrackDescriptors()) {
             ImGui::BeginDisabled();
         }
 
         const float labelColWidth = std::max(200.0f, ImGui::CalcTextSize("Extract constant buffer   ").x);
-        if (ImGui::BeginTable("ConstantBufferSettings", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
+        if (ImGui::BeginTable("ConstantBufferSettings", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody, ImVec2(-RFX_CARD_PAD, 0.0f))) {
             ImGui::TableSetupColumn("##CBcolumnsetup", ImGuiTableColumnFlags_WidthFixed, labelColWidth);
             ImGui::TableSetupColumn("##CBcontrols", ImGuiTableColumnFlags_WidthStretch);
 
@@ -200,105 +181,113 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
 
             DisplayConstantSettings(group);
 
+            if (!extractionEnabled) {
+                ImGui::EndDisabled();
+            }
+
+            if (!instance.GetTrackDescriptors()) {
+                ImGui::EndDisabled();
+            }
+
             ImGui::EndTable();
         }
         group->setExtractConstant(extractionEnabled);
         group->setCBIsPushMode(cbModeSelectionIndex == 1);
         group->setCBShaderStage(selectedStageIndex);
 
-        ImGui::Separator();
+        EndCard();
+    }
 
-        if (bufferContent != nullptr && bufferSize > 0 &&
-            ImGui::BeginTable("Buffer View Grid##table",
-                              columns + 1,
-                              ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Borders |
-                                ImGuiTableFlags_RowBg)) {
-            size_t elements = bufferSize / typeSizes[typeSelectionIndex];
+    ImGui::Spacing();
 
-            ImGui::TableSetupScrollFreeze(0, 1);
-            for (int i = 0; i < columns + 1; i++) {
-                if (i == 0) {
-                    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 40);
-                } else {
-                    ImGui::TableSetupColumn(std::format("{:#04x}", (i - 1) * typeSizes[typeSelectionIndex]).c_str(), ImGuiTableColumnFlags_None);
-                }
-            }
+    if (BeginCard("##cb_data_card", "CONSTANT BUFFER DATA")) {
+        if (bufferContent != nullptr && bufferSize > 0) {
+            const float gridHeight = 200.0f;
+            if (ImGui::BeginTable("Buffer View Grid##table",
+                                  columns + 1,
+                                  ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Borders |
+                                    ImGuiTableFlags_RowBg,
+                                  ImVec2(-RFX_CARD_PAD, gridHeight))) {
+                size_t elements = bufferSize / typeSizes[typeSelectionIndex];
 
-            ImGui::TableHeadersRow();
-
-            ImGuiListClipper clipper;
-
-            double clipElements =
-              (static_cast<double>(elements) + static_cast<double>(elements) / static_cast<double>(columns)) / static_cast<double>(columns + 1);
-            clipper.Begin(static_cast<int>(std::ceil(clipElements)));
-            while (clipper.Step()) {
-                for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++) {
-                    for (int i = row * (columns + 1); i < row * static_cast<ptrdiff_t>(columns + 1) + static_cast<ptrdiff_t>(columns + 1); i++) {
-                        if (i % (columns + 1) == 0) {
-                            ImGui::TableNextColumn();
-                            ImGui::TableHeader(std::format("{:#05x}", i / (columns + 1) * typeSizes[typeSelectionIndex] * columns).c_str());
-                            continue;
-                        }
-
-                        std::stringstream sContent;
-
-                        if (typeSelectionIndex == 0) {
-                            sContent << std::format("{:02X}", bufferContent[i - i / (columns + 1) - 1]) << std::endl;
-                        } else {
-                            uint32_t bufferOffset = (i - i / (columns + 1) - 1) * typeSizes[typeSelectionIndex];
-
-                            switch (typeSelectionIndex) {
-                                case 1:
-                                    sContent << std::format("{:.8f}", *(reinterpret_cast<const float*>(&bufferContent[bufferOffset]))) << std::endl;
-                                    break;
-                                case 2:
-                                    sContent << *(reinterpret_cast<const int32_t*>(&bufferContent[bufferOffset])) << std::endl;
-                                    break;
-                                case 3:
-                                    sContent << *(reinterpret_cast<const uint32_t*>(&bufferContent[bufferOffset])) << std::endl;
-                                    break;
-                            }
-                        }
-
-                        ImGui::TableNextColumn();
-                        const auto& txt = sContent.str();
-                        ImGui::Text(txt.c_str());
+                ImGui::TableSetupScrollFreeze(0, 1);
+                for (int i = 0; i < columns + 1; i++) {
+                    if (i == 0) {
+                        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 40);
+                    } else {
+                        ImGui::TableSetupColumn(std::format("{:#04x}", (i - 1) * typeSizes[typeSelectionIndex]).c_str(), ImGuiTableColumnFlags_None);
                     }
                 }
+
+                ImGui::TableHeadersRow();
+
+                ImGuiListClipper clipper;
+
+                double clipElements =
+                  (static_cast<double>(elements) + static_cast<double>(elements) / static_cast<double>(columns)) / static_cast<double>(columns + 1);
+                clipper.Begin(static_cast<int>(std::ceil(clipElements)));
+                while (clipper.Step()) {
+                    for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++) {
+                        for (int i = row * (columns + 1); i < row * static_cast<ptrdiff_t>(columns + 1) + static_cast<ptrdiff_t>(columns + 1); i++) {
+                            if (i % (columns + 1) == 0) {
+                                ImGui::TableNextColumn();
+                                ImGui::TableHeader(std::format("{:#05x}", i / (columns + 1) * typeSizes[typeSelectionIndex] * columns).c_str());
+                                continue;
+                            }
+
+                            std::stringstream sContent;
+
+                            if (typeSelectionIndex == 0) {
+                                sContent << std::format("{:02X}", bufferContent[i - i / (columns + 1) - 1]) << std::endl;
+                            } else {
+                                uint32_t bufferOffset = (i - i / (columns + 1) - 1) * typeSizes[typeSelectionIndex];
+
+                                switch (typeSelectionIndex) {
+                                    case 1:
+                                        sContent << std::format("{:.8f}", *(reinterpret_cast<const float*>(&bufferContent[bufferOffset]))) << std::endl;
+                                        break;
+                                    case 2:
+                                        sContent << *(reinterpret_cast<const int32_t*>(&bufferContent[bufferOffset])) << std::endl;
+                                        break;
+                                    case 3:
+                                        sContent << *(reinterpret_cast<const uint32_t*>(&bufferContent[bufferOffset])) << std::endl;
+                                        break;
+                                }
+                            }
+
+                            ImGui::TableNextColumn();
+                            const auto& txt = sContent.str();
+                            ImGui::Text(txt.c_str());
+                        }
+                    }
+                }
+                clipper.End();
+
+                ImGui::EndTable();
             }
-            clipper.End();
-
-            ImGui::EndTable();
+        } else {
+            ImGui::Spacing();
+            ImGui::TextDisabled(extractionEnabled ? "No constant buffer data intercepted yet for this group." : "Enable constant buffer extraction above to view buffer data.");
         }
 
-        if (!extractionEnabled) {
-            ImGui::EndDisabled();
-        }
-
-        if (!instance.GetTrackDescriptors()) {
-            ImGui::EndDisabled();
-        }
-
-        ImGui::PopStyleVar();
+        EndCard();
     }
-    ImGui::EndChild();
 
-    ImGui::PushID(1);
-    ImGui::Button("", ImVec2(-1, 8.0f));
-    ImGui::PopID();
-    if (ImGui::IsItemActive())
-        height += ImGui::GetIO().MouseDelta.y;
+    ImGui::Spacing();
 
-    if (ImGui::BeginChild("Constant Buffer Viewer##vars", { 0, 0 }, true, ImGuiChildFlags_AlwaysAutoResize)) {
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
-
+    if (BeginCard("##cb_vars_card", "VARIABLE MAPPINGS")) {
+        const float addBtnW = ImGui::CalcTextSize("Add Variable Binding").x + ImGui::GetStyle().FramePadding.x * 2.0f + 14.0f;
         if (!extractionEnabled) {
             instance.GetConstantHandler()->RemoveGroup(group, dev);
             ImGui::BeginDisabled();
         }
 
-        if (ImGui::Button("Add Variable Binding")) {
+        if (ImGui::Button("Add Variable Binding", ImVec2(addBtnW, 0))) {
             ImGui::OpenPopup("Add###const_variables");
+        }
+
+        if (!extractionEnabled) {
+            ImGui::EndDisabled();
         }
 
         ImGui::Separator();
@@ -365,7 +354,8 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
         if (varMap.size() > 0 &&
             ImGui::BeginTable("Buffer View Grid##vartable",
                               IM_ARRAYSIZE(varColumns) + 1,
-                              ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoBordersInBody)) {
+                              ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoBordersInBody,
+                              ImVec2(-RFX_CARD_PAD, 150.0f))) {
             for (int i = 0; i < IM_ARRAYSIZE(varColumns); i++) {
                 ImGui::TableSetupColumn(varColumns[i], ImGuiTableColumnFlags_None);
             }
@@ -391,17 +381,13 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
             }
 
             ImGui::EndTable();
+        } else if (varMap.empty()) {
+            ImGui::Spacing();
+            ImGui::TextDisabled("No variable bindings configured for this group.");
         }
 
         std::for_each(removal.begin(), removal.end(), [&group](std::string& e) { group->RemoveVarMapping(e); });
 
-        if (!extractionEnabled) {
-            ImGui::EndDisabled();
-        }
-
-        ImGui::PopStyleVar();
+        EndCard();
     }
-    ImGui::EndChild();
-
-    ImGui::PopStyleVar();
 }
