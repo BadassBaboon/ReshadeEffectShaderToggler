@@ -32,7 +32,9 @@
 
 #include "ToggleGroup.h"
 #include "stdafx.h"
+#include <algorithm>
 #include <sstream>
+#include <vector>
 
 using namespace std;
 
@@ -40,6 +42,7 @@ namespace ShaderToggler {
 ToggleGroup::ToggleGroup(string name, int id) {
     _name = name.size() > 0 ? name : "Default";
     _id = id;
+    _keybind = 0;
     _isActive = false;
     _isEditing = false;
     _allowAllTechniques = true;
@@ -50,16 +53,20 @@ ToggleGroup::ToggleGroup(string name, int id) {
     _extractResourceViews = false;
     _matchSwapchainResolution = true;
     _copyTextureBinding = false;
+    _clearBindings = false;
+    _requeueAfterRTMatchingFailure = false;
     _previewClearAlpha = true;
     _tonemapHDRtoSDRtoHDR = false;
     _preserveAlpha = false;
     _renderToResourceViews = false;
+    _autoRenderSRV = false;
+    _hideMarkedShaders = false;
     _cbCycle = CYCLE_NONE;
     _srvCycle = CYCLE_NONE;
     _rtCycle = CYCLE_NONE;
 
     _group_buffers[static_cast<uint32_t>(GroupResourceType::RESOURCE_ALPHA)] = {
-        {}, {}, {}, {}, {}, {}, {}, [&]() { return true; }, [&]() { return false; }, GroupResourceState::RESOURCE_INVALID, true
+        {}, {}, {}, {}, {}, {}, {}, [&]() { return _preserveAlpha && !_autoRenderSRV; }, [&]() { return false; }, GroupResourceState::RESOURCE_INVALID, true
     };
     _group_buffers[static_cast<uint32_t>(GroupResourceType::RESOURCE_BINDING)] = { {},
                                                                                    {},
@@ -75,8 +82,21 @@ ToggleGroup::ToggleGroup(string name, int id) {
     _group_buffers[static_cast<uint32_t>(GroupResourceType::RESOURCE_CONSTANTS_COPY)] = {
         {}, {}, {}, {}, {}, {}, {}, [&]() { return _extractConstants; }, [&]() { return false; }, GroupResourceState::RESOURCE_INVALID, true
     };
-    _group_buffers[static_cast<uint32_t>(GroupResourceType::RESOURCE_INTERMEDIATE_FULLRES)] = {
-        {}, {}, {}, {}, {}, {}, {}, [&]() { return true; }, [&]() { return false; }, GroupResourceState::RESOURCE_INVALID, true
+    _group_buffers[static_cast<uint32_t>(GroupResourceType::RESOURCE_NATIVE_STAGING)] = {
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        [this]() {
+            const GroupResource& staging = _group_buffers[static_cast<uint32_t>(GroupResourceType::RESOURCE_NATIVE_STAGING)];
+            return _autoRenderSRV && staging.target_description.texture.width > 0 && staging.target_description.texture.height > 0;
+        },
+        [this]() { return false; },
+        GroupResourceState::RESOURCE_INVALID,
+        true
     };
 }
 
@@ -138,9 +158,86 @@ ToggleGroup::ToggleGroup(const ToggleGroup& other)
     _srvCycle = other._srvCycle;
     _rtCycle = other._rtCycle;
     _renderToResourceViews = other._renderToResourceViews;
+    _autoRenderSRV = other._autoRenderSRV;
+    _hideMarkedShaders = other._hideMarkedShaders;
     _renderSrvDescIndex = other._renderSrvDescIndex;
     _renderSrvShaderStage = other._renderSrvShaderStage;
     _renderSrvSlotIndex = other._renderSrvSlotIndex;
+    _configDirtyFlag = other._configDirtyFlag;
+}
+
+ToggleGroup ToggleGroup::cloneForNewId(int newId) const {
+    ToggleGroup clone(*this);
+    clone._id = newId;
+    clone._name = _name + " Copy";
+    clone._keybind = 0;
+    clone._gamepadShortcut = 0;
+    clone._isActive = false;
+    clone._isEditing = false;
+    clone._cbCycle = CYCLE_NONE;
+    clone._srvCycle = CYCLE_NONE;
+    clone._rtCycle = CYCLE_NONE;
+    return clone;
+}
+
+std::string ToggleGroup::configurationSignature() const {
+    std::ostringstream ss;
+
+    auto appendUIntSet = [&ss](const std::unordered_set<uint32_t>& values) {
+        std::vector<uint32_t> sorted(values.begin(), values.end());
+        std::sort(sorted.begin(), sorted.end());
+        for (const uint32_t value : sorted)
+            ss << value << ',';
+        ss << ';';
+    };
+
+    auto appendStringSet = [&ss](const std::unordered_set<std::string>& values) {
+        std::vector<std::string> sorted(values.begin(), values.end());
+        std::sort(sorted.begin(), sorted.end());
+        for (const auto& value : sorted)
+            ss << value.size() << ':' << value << ',';
+        ss << ';';
+    };
+
+    ss << _name.size() << ':' << _name << ';' << _keybind << ';' << _isActive << ';';
+    appendUIntSet(_vertexShaderHashes);
+    appendUIntSet(_pixelShaderHashes);
+    appendUIntSet(_computeShaderHashes);
+
+    ss << _invocationLocation << ';' << _rtIndex << ';'
+       << _cbSlotIndex << ';' << _cbDescIndex << ';' << _cbShaderStage << ';'
+       << _bindingInvocationLocation << ';' << _bindingRTIndex << ';'
+       << _bindingSrvSlotIndex << ';' << _renderSrvSlotIndex << ';'
+       << _bindingSrvDescIndex << ';' << _renderSrvDescIndex << ';'
+       << _bindingSrvShaderStage << ';' << _renderSrvShaderStage << ';'
+       << _allowAllTechniques << ';' << _isProvidingTextureBinding << ';'
+       << _copyTextureBinding << ';' << _renderToResourceViews << ';'
+       << _autoRenderSRV << ';' << _hideMarkedShaders << ';' << _extractConstants << ';'
+       << _extractResourceViews << ';' << _clearBindings << ';'
+       << _previewClearAlpha << ';' << _hasTechniqueExceptions << ';'
+       << _tonemapHDRtoSDRtoHDR << ';' << _preserveAlpha << ';'
+       << _flipBuffer << ';' << _flipBufferBinding << ';'
+       << _suppressDrawCall << ';' << _gamepadShortcut << ';'
+       << _matchVertexCount << ';' << _vertexCountMin << ';' << _vertexCountMax << ';'
+       << _matchIndexCount << ';' << _indexCountMin << ';' << _indexCountMax << ';'
+       << _matchInstanceCount << ';' << _instanceCountMin << ';' << _instanceCountMax << ';'
+       << _matchSwapchainResolution << ';' << _bindingMatchSwapchainResolution << ';'
+       << _requeueAfterRTMatchingFailure << ';' << _cbModePush << ';'
+       << _textureBindingName.size() << ':' << _textureBindingName << ';';
+
+    appendStringSet(_preferredTechniques);
+
+    std::vector<std::string> variableNames;
+    variableNames.reserve(_varOffsetMapping.size());
+    for (const auto& [name, _] : _varOffsetMapping)
+        variableNames.push_back(name);
+    std::sort(variableNames.begin(), variableNames.end());
+    for (const auto& name : variableNames) {
+        const auto& [offset, usePrevious] = _varOffsetMapping.at(name);
+        ss << name.size() << ':' << name << ':' << offset << ':' << usePrevious << ',';
+    }
+
+    return ss.str();
 }
 
 void ToggleGroup::AssignPreferredTechniqueData(std::unordered_map<std::string, EffectData>& allTechniques) {
@@ -172,19 +269,15 @@ GroupResource& ToggleGroup::GetGroupResource(GroupResourceType type) {
 void ToggleGroup::storeCollectedHashes(const unordered_set<uint32_t> pixelShaderHashes,
                                        const unordered_set<uint32_t> vertexShaderHashes,
                                        const unordered_set<uint32_t> computeShaderHashes) {
-    _vertexShaderHashes.clear();
-    _pixelShaderHashes.clear();
-    _computeShaderHashes.clear();
+    if (_pixelShaderHashes == pixelShaderHashes &&
+        _vertexShaderHashes == vertexShaderHashes &&
+        _computeShaderHashes == computeShaderHashes)
+        return;
 
-    for (const auto hash : vertexShaderHashes) {
-        _vertexShaderHashes.emplace(hash);
-    }
-    for (const auto hash : pixelShaderHashes) {
-        _pixelShaderHashes.emplace(hash);
-    }
-    for (const auto hash : computeShaderHashes) {
-        _computeShaderHashes.emplace(hash);
-    }
+    _pixelShaderHashes = pixelShaderHashes;
+    _vertexShaderHashes = vertexShaderHashes;
+    _computeShaderHashes = computeShaderHashes;
+    markConfigDirty();
 }
 
 bool ToggleGroup::isBlockedVertexShader(uint32_t shaderHash) const {
@@ -206,22 +299,22 @@ void ToggleGroup::clearHashes() {
 }
 
 void ToggleGroup::setName(string newName) {
-    if (newName.size() <= 0) {
+    if (newName.empty() || _name == newName)
         return;
-    }
-    _name = newName;
+    _name = std::move(newName);
+    markConfigDirty();
 }
 
 bool ToggleGroup::SetVarMapping(uintptr_t offset, string& variable, bool prev) {
-    _varOffsetMapping.emplace(variable, make_tuple(offset, prev));
-
-    return true; // do some sanity checking?
+    const auto [it, inserted] = _varOffsetMapping.insert_or_assign(variable, make_tuple(offset, prev));
+    markConfigDirty();
+    return true;
 }
 
 bool ToggleGroup::RemoveVarMapping(string& variable) {
-    _varOffsetMapping.erase(variable);
-
-    return true; // do some sanity checking?
+    if (_varOffsetMapping.erase(variable) > 0)
+        markConfigDirty();
+    return true;
 }
 
 void ToggleGroup::saveState(CDataFile& iniFile, int groupCounter) const {
@@ -278,6 +371,8 @@ void ToggleGroup::saveState(CDataFile& iniFile, int groupCounter) const {
         firstElement = false;
     }
     iniFile.SetBool("RenderToSRVs", _renderToResourceViews, "", sectionRoot);
+    iniFile.SetBool("AutoRenderSRV", _autoRenderSRV, "", sectionRoot);
+    iniFile.SetBool("HideMarkedShaders", _hideMarkedShaders, "", sectionRoot);
     iniFile.SetUInt("RenderSRVPipelineSlot", _renderSrvSlotIndex, "", sectionRoot);
     iniFile.SetUInt("RenderSRVDescriptorIndex", _renderSrvDescIndex, "", sectionRoot);
     iniFile.SetUInt("RenderSRVShaderStage", _renderSrvShaderStage, "", sectionRoot);
@@ -504,6 +599,8 @@ void ToggleGroup::loadState(CDataFile& iniFile, int groupCounter) {
     }
 
     _renderToResourceViews = iniFile.GetBoolOrDefault("RenderToSRVs", sectionRoot, false);
+    _autoRenderSRV = iniFile.GetBoolOrDefault("AutoRenderSRV", sectionRoot, false);
+    _hideMarkedShaders = iniFile.GetBoolOrDefault("HideMarkedShaders", sectionRoot, false);
 
     uint32_t renderSrvSlotIndex = iniFile.GetUInt("RenderSRVPipelineSlot", sectionRoot);
     if (renderSrvSlotIndex != UINT_MAX) {

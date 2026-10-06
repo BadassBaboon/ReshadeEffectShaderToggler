@@ -176,7 +176,7 @@ void ToggleGroupResourceManager::CheckGroupBuffers(reshade::api::effect_runtime*
 
             if (static_cast<GroupResourceType>(i) == GroupResourceType::RESOURCE_ALPHA ||
                 static_cast<GroupResourceType>(i) == GroupResourceType::RESOURCE_BINDING ||
-                static_cast<GroupResourceType>(i) == GroupResourceType::RESOURCE_INTERMEDIATE_FULLRES) {
+                static_cast<GroupResourceType>(i) == GroupResourceType::RESOURCE_NATIVE_STAGING) {
                 reshade::api::resource_usage res_usage = resource_usage::copy_dest | resource_usage::copy_source | resource_usage::shader_resource;
 
                 bool validRT = isValidRenderTarget(resources.target_description.texture.format);
@@ -185,42 +185,56 @@ void ToggleGroupResourceManager::CheckGroupBuffers(reshade::api::effect_runtime*
                 }
 
                 resource_desc desc = resources.target_description;
-                
-                uint32_t buffer_width = desc.texture.width;
-                uint32_t buffer_height = desc.texture.height;
-
-                if (static_cast<GroupResourceType>(i) == GroupResourceType::RESOURCE_INTERMEDIATE_FULLRES) {
-                    uint32_t sw = 0, sh = 0;
-                    runtime->get_screenshot_width_and_height(&sw, &sh);
-                    if (sw != 0 && sh != 0) {
-                        buffer_width = sw;
-                        buffer_height = sh;
-                    }
-                }
-
+                const bool vulkan = runtime->get_device()->get_api() == device_api::vulkan;
+                const reshade::api::format groupFormat =
+                  vulkan
+                    ? (resources.view_format != format::unknown ? resources.view_format : format_to_default_typed(desc.texture.format, 0))
+                    : format_to_typeless(desc.texture.format);
                 resource_desc group_desc =
-                  resource_desc(buffer_width, buffer_height, 1, 1, format_to_typeless(desc.texture.format), 1, memory_heap::gpu_only, res_usage);
+                  resource_desc(desc.texture.width, desc.texture.height, 1, 1, groupFormat, 1, memory_heap::gpu_only, res_usage);
 
-                if (!runtime->get_device()->create_resource(group_desc, nullptr, resource_usage::shader_resource, &resources.res)) {
-                    reshade::log::message(reshade::log::level::error, "Failed to create group render target!");
+                const resource_usage initial_state =
+                  static_cast<GroupResourceType>(i) == GroupResourceType::RESOURCE_NATIVE_STAGING ? resource_usage::render_target : resource_usage::copy_dest;
+
+                if (!runtime->get_device()->create_resource(group_desc, nullptr, initial_state, &resources.res)) {
+                    reshade::log::message(
+                      reshade::log::level::error,
+                      std::format("Failed to create group render target (group '{}', resource type {}, {}x{}, format {}).",
+                                  group.getName(),
+                                  i,
+                                  desc.texture.width,
+                                  desc.texture.height,
+                                  static_cast<uint32_t>(groupFormat))
+                        .c_str());
                 }
+
+                const reshade::api::format linearViewFormat =
+                  vulkan
+                    ? (resources.view_format != format::unknown ? resources.view_format : groupFormat)
+                    : format_to_default_typed(resources.view_format, 0);
 
                 if (validRT && resources.res != 0 &&
                     !runtime->get_device()->create_resource_view(
-                      resources.res, resource_usage::shader_resource, resource_view_desc(format_to_default_typed(resources.view_format, 0)), &resources.srv)) {
+                      resources.res, resource_usage::shader_resource, resource_view_desc(linearViewFormat), &resources.srv)) {
                     reshade::log::message(reshade::log::level::error, "Failed to create group shader resource view!");
                 }
 
                 if (validRT && resources.res != 0 &&
                     !runtime->get_device()->create_resource_view(
-                      resources.res, resource_usage::render_target, resource_view_desc(format_to_default_typed(resources.view_format, 0)), &resources.rtv)) {
+                      resources.res, resource_usage::render_target, resource_view_desc(linearViewFormat), &resources.rtv)) {
                     reshade::log::message(reshade::log::level::error, "Failed to create group render target view!");
                 }
 
-                if (resources.res != 0 && !runtime->get_device()->create_resource_view(resources.res,
-                                                                                       resource_usage::render_target,
-                                                                                       resource_view_desc(format_to_default_typed(resources.view_format, 1)),
-                                                                                       &resources.rtv_srgb)) {
+                if (vulkan) {
+                    // Vulkan images have a concrete format rather than D3D-style typeless
+                    // storage. Reuse the compatible render-target view instead of asking
+                    // for an alternate sRGB reinterpretation that may be illegal.
+                    resources.rtv_srgb = resources.rtv;
+                } else if (resources.res != 0 &&
+                           !runtime->get_device()->create_resource_view(resources.res,
+                                                                        resource_usage::render_target,
+                                                                        resource_view_desc(format_to_default_typed(resources.view_format, 1)),
+                                                                        &resources.rtv_srgb)) {
                     reshade::log::message(reshade::log::level::error, "Failed to create group SRGB render target view!");
                 }
             } else if (static_cast<GroupResourceType>(i) == GroupResourceType::RESOURCE_CONSTANTS_COPY) {
@@ -268,16 +282,10 @@ bool ToggleGroupResourceManager::IsCompatibleWithGroupFormat(reshade::api::devic
     resource_desc tdesc = device->get_resource_desc(res);
     resource_desc preview_desc = device->get_resource_desc(resources.res);
 
-    if (type == GroupResourceType::RESOURCE_ALPHA || type == GroupResourceType::RESOURCE_BINDING || type == GroupResourceType::RESOURCE_INTERMEDIATE_FULLRES) {
-        bool format_match = format_to_typeless(tdesc.texture.format) == format_to_typeless(preview_desc.texture.format) &&
-                            tdesc.texture.levels == preview_desc.texture.levels;
-        
-        if (type == GroupResourceType::RESOURCE_INTERMEDIATE_FULLRES) {
-            // For the intermediate buffer, it's always created at swapchain dimensions, 
-            // so we don't demand it matches the off-size target dimensions.
-            return format_match;
-        } else {
-            return format_match && tdesc.texture.width == preview_desc.texture.width && tdesc.texture.height == preview_desc.texture.height;
+    if (type == GroupResourceType::RESOURCE_ALPHA || type == GroupResourceType::RESOURCE_BINDING || type == GroupResourceType::RESOURCE_NATIVE_STAGING) {
+        if (format_to_typeless(tdesc.texture.format) == format_to_typeless(preview_desc.texture.format) && tdesc.texture.width == preview_desc.texture.width &&
+            tdesc.texture.height == preview_desc.texture.height && tdesc.texture.levels == preview_desc.texture.levels) {
+            return true;
         }
     } else if (type == GroupResourceType::RESOURCE_CONSTANTS_COPY) {
         if (tdesc.buffer.size == preview_desc.buffer.size) {

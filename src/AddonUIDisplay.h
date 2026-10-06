@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////////////////////////////
 //
-// Part of ShaderToggler, a shader toggler add on for Reshade 5+ which allows you
+// Part of ShaderToggler, a shader toggler add on for ReShade 5+ which allows you
 // to define groups of shaders to toggle them on/off with one key press
 //
 // (c) Frans 'Otis_Inf' Bouma.
@@ -36,18 +36,25 @@
 #include "ConstantManager.h"
 #include "GamepadMonitor.h"
 #include "KeyData.h"
+#include "RenderingManager.h"
 #include "ResourceManager.h"
+#include "version.h"
 #include <algorithm>
+#include <atomic>
+#include <cctype>
 #include <cwctype>
 #include <format>
 #include <imgui.h>
 #include <ranges>
 #include <reshade.hpp>
 #include <string>
+#include <unordered_set>
+#include <vector>
+#include <windows.h>
 
 #define MAX_DESCRIPTOR_INDEX 10
 
-// From Reshade, see https://github.com/crosire/reshade/blob/main/source/imgui_widgets.cpp
+// From ReShade, see https://github.com/crosire/reshade/blob/main/source/imgui_widgets.cpp
 static bool key_input_box(const char* name, uint32_t* keys, const reshade::api::effect_runtime* runtime) {
     char buf[48];
     buf[0] = '\0';
@@ -163,18 +170,21 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
                                       AddonImGui::AddonUIData& instance,
                                       ShaderToggler::ToggleGroup* group,
                                       float tblWidth = 0) {
-    if (group == nullptr) {
+    if (group == nullptr)
         return;
-    }
 
     RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
-
-    std::unordered_set<std::string> curTechniques = group->preferredTechniques();
-    std::unordered_set<std::string> newTechniques;
     static char searchBuf[256] = "\0";
 
     bool allowAll = group->getAllowAllTechniques();
     bool exceptions = group->getHasTechniqueExceptions();
+    bool selectionChanged = false;
+
+    size_t availableCount = 0;
+    {
+        std::shared_lock<std::shared_mutex> techLock(runtimeData.technique_mutex);
+        availableCount = runtimeData.techniqueUiCache.size();
+    }
 
     if (ImGui::BeginTable("Technique selection##options", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
         ImGui::TableSetupColumn("##columnsetup", ImGuiTableColumnFlags_WidthFixed, tblWidth);
@@ -185,77 +195,98 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
         ImGui::Checkbox("##Catchalltechniques", &allowAll);
 
         ImGui::TableNextRow();
-
         if (allowAll) {
             ImGui::TableNextColumn();
             ImGui::Text("Except for selected techniques");
             ImGui::TableNextColumn();
             ImGui::Checkbox("##Exceptfor", &exceptions);
-
             ImGui::TableNextRow();
         }
 
         ImGui::TableNextColumn();
-        ImGui::Text("Search");
+        ImGui::Text("Mode");
         ImGui::TableNextColumn();
-        ImGui::InputText("##techniqueSearch", searchBuf, 256, ImGuiInputTextFlags_None);
+        if (!allowAll)
+            ImGui::TextUnformatted("Only ticked enabled techniques are applied");
+        else if (exceptions)
+            ImGui::TextUnformatted("Ticked techniques are EXCLUDED");
+        else
+            ImGui::TextUnformatted("All globally enabled techniques are applied");
 
         ImGui::TableNextRow();
-
         ImGui::TableNextColumn();
-        if (ImGui::Button("Untick all")) {
-            curTechniques.clear();
+        ImGui::Text("Search");
+        ImGui::TableNextColumn();
+        ImGui::InputText("##techniqueSearch", searchBuf, IM_ARRAYSIZE(searchBuf));
+
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        if (ImGui::Button("Untick all") && !group->preferredTechniques().empty()) {
+            const std::unordered_set<std::string> empty;
+            group->setPreferredTechniques(empty);
+            selectionChanged = true;
         }
         ImGui::TableNextColumn();
-
+        ImGui::Text("%zu selected / %zu available", group->preferredTechniques().size(), availableCount);
         ImGui::EndTable();
     }
 
     ImGui::Separator();
 
-    if (allowAll && !exceptions) {
+    if (allowAll && !exceptions)
         ImGui::BeginDisabled();
-    }
-    if (ImGui::BeginTable("Technique selection##table", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoBordersInBody)) {
-        ImGui::TableSetupColumn("##columnsetupSelection", ImGuiTableColumnFlags_WidthFixed, tblWidth);
 
-        std::string searchString(searchBuf);
+    std::string searchUpper(searchBuf);
+    std::transform(searchUpper.begin(), searchUpper.end(), searchUpper.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
 
-        if (runtimeData.allTechniques.size() > 0) {
-            for (const auto& [name, effData] : runtimeData.allTechniques) {
-                bool enabled = curTechniques.contains(name);
+    {
+        std::shared_lock<std::shared_mutex> techLock(runtimeData.technique_mutex);
+        if (ImGui::BeginTable("Technique selection##table", 3,
+                              ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoBordersInBody)) {
+            ImGui::TableSetupColumn("##columnsetupSelection", ImGuiTableColumnFlags_WidthFixed, tblWidth);
 
-                if (std::ranges::search(
-                      name, searchString, [](const wchar_t lhs, const wchar_t rhs) { return lhs == rhs; }, std::towupper, std::towupper)
-                      .begin() != name.end()) {
-                    ImGui::TableNextColumn();
-                    ImGui::Checkbox(name.c_str(), &enabled);
+            for (const auto& entry : runtimeData.techniqueUiCache) {
+                if (!searchUpper.empty() && entry.upperName.find(searchUpper) == std::string::npos)
+                    continue;
+
+                bool enabled = group->preferredTechniques().contains(entry.name);
+                ImGui::TableNextColumn();
+                if (ImGui::Checkbox(entry.name.c_str(), &enabled)) {
+                    auto updated = group->preferredTechniques();
+                    if (enabled)
+                        updated.insert(entry.name);
+                    else
+                        updated.erase(entry.name);
+                    group->setPreferredTechniques(updated);
+                    selectionChanged = true;
                 }
 
-                if (enabled) {
-                    newTechniques.insert(name);
+                if (entry.effect != nullptr && !entry.effect->enabled) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(disabled in ReShade)");
                 }
             }
+            ImGui::EndTable();
         }
-
-        ImGui::EndTable();
     }
 
-    if (allowAll && !exceptions) {
+    if (allowAll && !exceptions)
         ImGui::EndDisabled();
-    }
 
     group->setHasTechniqueExceptions(exceptions);
     group->setAllowAllTechniques(allowAll);
 
-    std::shared_lock<std::shared_mutex> techLock(runtimeData.technique_mutex);
-    if (runtimeData.allTechniques.size() > 0) {
-        group->setPreferredTechniques(newTechniques);
+    if (selectionChanged) {
+        std::shared_lock<std::shared_mutex> techLock(runtimeData.technique_mutex);
         instance.AssignPreferredGroupTechniques(runtimeData.allTechniques);
     }
 }
 
-static void DrawPreview(unsigned long long textureId, uint32_t srcWidth, uint32_t srcHeight) {
+static void DrawPreview(unsigned long long textureId,
+                        uint32_t srcWidth,
+                        uint32_t srcHeight,
+                        ImVec4 tint = ImVec4(1.0f, 1.0f, 1.0f, 1.0f)) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
     float height = ImGui::GetWindowHeight();
     float width = ImGui::GetWindowWidth();
@@ -267,11 +298,10 @@ static void DrawPreview(unsigned long long textureId, uint32_t srcWidth, uint32_
     new_width *= ratio;
     new_height *= ratio;
 
-    auto initialCursorPos = ImGui::GetCursorPos();
     auto centralizedCursorpos = ImVec2((width - new_width) * 0.5f, (height - new_height) * 0.5f);
     ImGui::SetCursorPos(centralizedCursorpos);
 
-    ImGui::Image(textureId, ImVec2(new_width, new_height), ImVec2(0, 0), ImVec2(1, 1));
+    ImGui::Image(textureId, ImVec2(new_width, new_height), ImVec2(0, 0), ImVec2(1, 1), tint);
 
     ImGui::PopStyleVar();
 }
@@ -288,25 +318,64 @@ static void DisplayPreview(AddonImGui::AddonUIData& instance,
         reshade::api::resource_view srv = reshade::api::resource_view{ 0 };
         resManager.SetPongPreviewHandles(runtime->get_device(), nullptr, nullptr, &srv);
         bool clearAlpha = group->getClearPreviewAlpha();
+        const bool vulkan = runtime->get_device()->get_api() == reshade::api::device_api::vulkan;
 
         ImGui::Text("Clear alpha channel");
         ImGui::SameLine();
+        if (vulkan)
+            ImGui::BeginDisabled();
         ImGui::Checkbox("##Clearalpha", &clearAlpha);
+        if (vulkan) {
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Vulkan safe preview currently copies the source image directly.");
+        }
 
-        if (srv != 0) {
+        if (!deviceData.huntPreview.status.empty()) {
             ImGui::SameLine();
-            ImGui::Text(std::format(" Address: 0x{:x} ", deviceData.huntPreview.target.handle).c_str());
+            ImGui::TextDisabled("%s", deviceData.huntPreview.status.c_str());
+        }
+
+        if (deviceData.huntPreview.target != 0) {
+            const char* stageName = deviceData.huntPreview.hunted_stage == 0 ? "PS" :
+                                    deviceData.huntPreview.hunted_stage == 1 ? "VS" : "CS";
+            ImGui::Text("Shader: 0x%08x (%s)", deviceData.huntPreview.hunted_shader_hash, stageName);
             ImGui::SameLine();
-            ImGui::Text(std::format("Format: {} ", static_cast<uint32_t>(deviceData.huntPreview.format)).c_str());
+            ImGui::Text("Target: %ux%u", deviceData.huntPreview.width, deviceData.huntPreview.height);
             ImGui::SameLine();
-            ImGui::Text(std::format("Width: {} ", deviceData.huntPreview.width).c_str());
+            ImGui::Text("Format: %s", Rendering::RenderingManager::FormatName(deviceData.huntPreview.format).c_str());
             ImGui::SameLine();
-            ImGui::Text(std::format("Height: {} ", deviceData.huntPreview.height).c_str());
+            ImGui::Text("Address: 0x%llx", static_cast<unsigned long long>(deviceData.huntPreview.target.handle));
             ImGui::Separator();
+        }
+
+        int& previewChannel = instance.GetHuntingUIState().previewChannel;
+        if (srv != 0 && deviceData.huntPreview.matched) {
+            ImGui::TextDisabled("View");
+            ImGui::SameLine();
+            ImGui::RadioButton("RGB", &previewChannel, 0);
+            ImGui::SameLine();
+            ImGui::RadioButton("R", &previewChannel, 1);
+            ImGui::SameLine();
+            ImGui::RadioButton("G", &previewChannel, 2);
+            ImGui::SameLine();
+            ImGui::RadioButton("B", &previewChannel, 3);
+
+            const ImVec4 previewTint =
+              previewChannel == 1 ? ImVec4(1.0f, 0.0f, 0.0f, 1.0f) :
+              previewChannel == 2 ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) :
+              previewChannel == 3 ? ImVec4(0.0f, 0.0f, 1.0f, 1.0f) :
+                                    ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 
             if (ImGui::BeginChild("RTPreview##preview", { 0, 0 }, false, ImGuiWindowFlags_None)) {
-                DrawPreview(srv.handle, deviceData.huntPreview.width, deviceData.huntPreview.height);
+                DrawPreview(srv.handle, deviceData.huntPreview.width, deviceData.huntPreview.height, previewTint);
             }
+            ImGui::EndChild();
+        } else if (vulkan && ImGui::BeginChild("RTPreview##preview", { 0, 0 }, false, ImGuiWindowFlags_None)) {
+            if (deviceData.huntPreview.status.empty())
+                ImGui::TextDisabled("Select a shader while hunting to capture a Vulkan preview.");
+            else
+                ImGui::TextDisabled("%s", deviceData.huntPreview.status.c_str());
             ImGui::EndChild();
         }
 
@@ -358,7 +427,6 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
                                  reshade::api::effect_runtime* runtime,
                                  ShaderToggler::ToggleGroup* group) {
     static float height = ImGui::GetWindowHeight();
-    static float width = ImGui::GetWindowWidth();
 
     const char* typeSelectedItem = invocationDescription[group->getInvocationLocation()];
     uint32_t selectedIndex = group->getInvocationLocation();
@@ -375,12 +443,16 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
     bool tonemap = group->getToneMap();
     bool preserveAlpha = group->getPreserveAlpha();
     bool flipbuffer = group->getFlipBuffer();
+    bool autoSceneColour = group->getAutoRenderSRV();
     bool suppressDraw = group->getSuppressDrawCall();
+
     static const char* swapchainMatchOptions[] = { "RESOLUTION", "ASPECT RATIO", "EXTENDED ASPECT RATIO", "NONE" };
     uint32_t selectedSwapchainMatchMode = group->getMatchSwapchainResolution();
     const char* typesSelectedSwapchainMatchMode = swapchainMatchOptions[selectedSwapchainMatchMode];
 
-    bool supportsSRVwrite = runtime->get_device()->get_api() < reshade::api::device_api::d3d12;
+    const reshade::api::device_api deviceApi = runtime->get_device()->get_api();
+    const bool autoSceneColourSupported = ShaderToggler::IsAutoSceneColourSupported(deviceApi);
+    const bool supportsSRVwrite = deviceApi < reshade::api::device_api::d3d12;
 
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
     if (ImGui::BeginChild("RenderTargets", { 0, height / 1.5f }, true, ImGuiChildFlags_AlwaysAutoResize)) {
@@ -389,174 +461,357 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
         if (ImGui::BeginTable("RenderTargetsSettings", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
             ImGui::TableSetupColumn("##RTcolumnsetup", ImGuiTableColumnFlags_WidthFixed, ImGui::GetWindowWidth() / 3);
 
-            if (supportsSRVwrite) {
-                ImGui::TableNextColumn();
-                ImGui::Text("Render destination");
-                ImGui::TableNextColumn();
-                if (ImGui::BeginCombo("##Renderdestination", typeSelectedDestItem, ImGuiComboFlags_None)) {
-                    for (int n = 0; n < IM_ARRAYSIZE(typeDestItems); n++) {
-                        bool is_selected = (typeSelectedDestItem == typeDestItems[n]);
-                        if (ImGui::Selectable(typeDestItems[n], is_selected)) {
-                            typeSelectedDestItem = typeDestItems[n];
-                            selectedDestIndex = n;
-                        }
-                        if (is_selected)
-                            ImGui::SetItemDefaultFocus();
-                    }
-                    ImGui::EndCombo();
-                }
-
-                ImGui::Separator();
+            ImGui::TableNextColumn();
+            ImGui::Text("Auto scene colour");
+            ImGui::TableNextColumn();
+            if (!autoSceneColourSupported)
+                ImGui::BeginDisabled();
+            ImGui::Checkbox("##AutoSceneColour", &autoSceneColour);
+            if (!autoSceneColourSupported)
+                ImGui::EndDisabled();
+            if (!autoSceneColourSupported) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(D3D10/D3D11/D3D12/Vulkan only)");
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("Auto Scene Colour supports D3D10, D3D11, D3D12 and Vulkan. Vulkan native staging uses ReShade\'s generic image-blit path.");
             }
 
-            if (supportsSRVwrite && selectedDestIndex == 1) {
-                if (!instance.GetTrackDescriptors()) {
-                    ImGui::BeginDisabled();
-                    group->setRenderToResourceViews(false);
+            const bool autoSceneColourActive = autoSceneColour && autoSceneColourSupported;
+            const bool pendingVulkanShaderEdits =
+              deviceApi == reshade::api::device_api::vulkan &&
+              instance.GetToggleGroupIdShaderEditing().load() == group->getId();
+
+            ImGui::TableNextRow();
+
+            if (autoSceneColourActive) {
+                ImGui::TableNextColumn();
+                ImGui::Text("Target");
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted("Live render target (matched draw)");
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("Graphics API");
+                ImGui::TableNextColumn();
+                if (deviceApi == reshade::api::device_api::d3d10)
+                    ImGui::TextUnformatted("D3D10");
+                else if (deviceApi == reshade::api::device_api::d3d11)
+                    ImGui::TextUnformatted("D3D11");
+                else if (deviceApi == reshade::api::device_api::d3d12)
+                    ImGui::TextUnformatted("D3D12");
+                else
+                    ImGui::TextUnformatted("Vulkan");
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("Current attempt");
+                ImGui::TableNextColumn();
+                if (pendingVulkanShaderEdits)
+                    ImGui::TextUnformatted("Finish shader hunting (Done) to apply marks");
+                else if (!group->getDebugAutoStatus().empty())
+                    ImGui::TextUnformatted(group->getDebugAutoStatus().c_str());
+                else
+                    ImGui::TextUnformatted("Waiting for matching render target...");
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("Current target");
+                ImGui::TableNextColumn();
+                if (group->getDebugCurrentSceneWidth() > 0 && group->getDebugCurrentSceneHeight() > 0) {
+                    ImGui::Text("%ux%u | %s | 0x%llx",
+                                group->getDebugCurrentSceneWidth(),
+                                group->getDebugCurrentSceneHeight(),
+                                group->getDebugCurrentFormat().empty() ? "(format unknown)" : group->getDebugCurrentFormat().c_str(),
+                                static_cast<unsigned long long>(group->getDebugCurrentTarget()));
                 } else {
-                    group->setRenderToResourceViews(true);
+                    ImGui::TextUnformatted("(none)");
                 }
 
+                ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Shader Stage");
+                ImGui::Text("Last successful injection");
                 ImGui::TableNextColumn();
-                if (ImGui::BeginCombo("##RenderShaderStage", selectedStage, ImGuiComboFlags_None)) {
-                    for (int n = 0; n < IM_ARRAYSIZE(stageItems); n++) {
-                        bool is_selected = (selectedStage == stageItems[n]);
-                        if (ImGui::Selectable(stageItems[n], is_selected)) {
-                            selectedStageIndex = n;
-                            selectedStage = stageItems[n];
+                if (group->getDebugEffectRenderCalls() > 0) {
+                    ImGui::Text("%ux%u -> %ux%u",
+                                group->getDebugSceneWidth(),
+                                group->getDebugSceneHeight(),
+                                group->getDebugEffectWidth(),
+                                group->getDebugEffectHeight());
+                } else {
+                    ImGui::TextUnformatted("(none yet)");
+                }
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("Last successful staging");
+                ImGui::TableNextColumn();
+                if (group->getDebugEffectRenderCalls() == 0) {
+                    ImGui::TextUnformatted("(none)");
+                } else if (group->getDebugNativeStaging() && deviceApi == reshade::api::device_api::vulkan) {
+                    ImGui::TextUnformatted("Vulkan image blit");
+                } else if (group->getDebugNativeStaging()) {
+                    ImGui::TextUnformatted("Fullscreen shader copy");
+                } else {
+                    ImGui::TextUnformatted("Direct");
+                }
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("Last successful techniques");
+                ImGui::TableNextColumn();
+                if (group->getDebugEffectRenderCalls() > 0)
+                    ImGui::Text("%u | %s",
+                                group->getDebugLastRenderedTechniqueCount(),
+                                group->getDebugLastTechniqueOrder().empty() ? "(none)" : group->getDebugLastTechniqueOrder().c_str());
+                else
+                    ImGui::TextUnformatted("(none)");
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("Successful renders");
+                ImGui::TableNextColumn();
+                ImGui::Text("%llu", static_cast<unsigned long long>(group->getDebugEffectRenderCalls()));
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("Diagnostics");
+                ImGui::TableNextColumn();
+                if (ImGui::Button("Copy diagnostics")) {
+                    const char* apiName = deviceApi == reshade::api::device_api::d3d10 ? "D3D10" :
+                                          deviceApi == reshade::api::device_api::d3d11 ? "D3D11" :
+                                          deviceApi == reshade::api::device_api::d3d12 ? "D3D12" : "Vulkan";
+                    const std::string diagnostics = std::format(
+                      "REST {}\n"
+                      "Group: {}\n"
+                      "API: {}\n"
+                      "Auto Scene Colour: active\n"
+                      "\nCurrent candidate / latest attempt\n"
+                      "Status: {}\n"
+                      "Target: {}x{} | {} | 0x{:x}\n"
+                      "\nLast successful injection\n"
+                      "Scene -> effect: {}x{} -> {}x{}\n"
+                      "Staging path: {}\n"
+                      "Vulkan boundary: {}\n"
+                      "Techniques: {}\n"
+                      "Technique order: {}\n"
+                      "Successful renders: {}\n"
+                      "Last successful target: 0x{:x}",
+                      REST_VERSION_STRING,
+                      group->getName(),
+                      apiName,
+                      group->getDebugAutoStatus().empty() ? "(none)" : group->getDebugAutoStatus(),
+                      group->getDebugCurrentSceneWidth(),
+                      group->getDebugCurrentSceneHeight(),
+                      group->getDebugCurrentFormat().empty() ? "(unknown)" : group->getDebugCurrentFormat(),
+                      static_cast<unsigned long long>(group->getDebugCurrentTarget()),
+                      group->getDebugSceneWidth(),
+                      group->getDebugSceneHeight(),
+                      group->getDebugEffectWidth(),
+                      group->getDebugEffectHeight(),
+                      group->getDebugEffectRenderCalls() == 0 ? "(none)" :
+                        (group->getDebugNativeStaging() ?
+                          (deviceApi == reshade::api::device_api::vulkan ? "Vulkan image blit" : "fullscreen shader copy") :
+                          "direct"),
+                      deviceApi == reshade::api::device_api::vulkan ?
+                        (group->getDebugLastVulkanBoundary().empty() ? "(none yet)" : group->getDebugLastVulkanBoundary()) :
+                        "not applicable",
+                      group->getDebugLastRenderedTechniqueCount(),
+                      group->getDebugLastTechniqueOrder().empty() ? "(none)" : group->getDebugLastTechniqueOrder(),
+                      static_cast<unsigned long long>(group->getDebugEffectRenderCalls()),
+                      static_cast<unsigned long long>(group->getDebugLastRenderTarget()));
+                    ImGui::SetClipboardText(diagnostics.c_str());
+                }
+
+                const auto recentCandidates = group->getDebugAutoHistory();
+                if (!recentCandidates.empty() && ImGui::TreeNode("Recent candidates")) {
+                    for (auto it = recentCandidates.rbegin(); it != recentCandidates.rend(); ++it) {
+                        const auto& entry = *it;
+                        if (entry.successfulRenders > 0) {
+                            ImGui::Text("#%llu 0x%08x | %ux%u | %s | %llu renders",
+                                        static_cast<unsigned long long>(entry.candidateId),
+                                        entry.shaderHash,
+                                        entry.sceneWidth,
+                                        entry.sceneHeight,
+                                        entry.status.empty() ? "(no status)" : entry.status.c_str(),
+                                        static_cast<unsigned long long>(entry.successfulRenders));
+                        } else {
+                            ImGui::Text("#%llu 0x%08x | %ux%u | %s",
+                                        static_cast<unsigned long long>(entry.candidateId),
+                                        entry.shaderHash,
+                                        entry.sceneWidth,
+                                        entry.sceneHeight,
+                                        entry.status.empty() ? "(no status)" : entry.status.c_str());
                         }
-                        if (is_selected)
-                            ImGui::SetItemDefaultFocus();
+
+                        if (entry.target != 0) {
+                            ImGui::TextDisabled("Target 0x%llx | %s%s%s",
+                                                static_cast<unsigned long long>(entry.target),
+                                                entry.format.empty() ? "(format unknown)" : entry.format.c_str(),
+                                                entry.boundary.empty() ? "" : " | ",
+                                                entry.boundary.empty() ? "" : entry.boundary.c_str());
+                        }
                     }
-                    ImGui::EndCombo();
-                }
-                group->setRenderSRVShaderStage(selectedStageIndex);
-
-                ImGui::TableNextRow();
-
-                ImGui::TableNextColumn();
-                ImGui::Text("Slot");
-                ImGui::TableNextColumn();
-                ImGui::Text("%u", group->getRenderSRVSlotIndex());
-                ImGui::SameLine();
-                ImGui::PushID(0);
-                if (ImGui::SmallButton("+")) {
-                    group->setRenderSRVSlotIndex(group->getRenderSRVSlotIndex() + 1);
-                }
-                ImGui::PopID();
-
-                if (group->getRenderSRVSlotIndex() != 0) {
-                    ImGui::SameLine();
-
-                    if (ImGui::SmallButton("-")) {
-                        group->setRenderSRVSlotIndex(group->getRenderSRVSlotIndex() - 1);
-                    }
-                }
-
-                ImGui::TableNextRow();
-
-                ImGui::TableNextColumn();
-                ImGui::Text("Binding");
-                ImGui::TableNextColumn();
-                ImGui::Text("%u", group->getRenderSRVDescriptorIndex());
-                ImGui::SameLine();
-                ImGui::PushID(2);
-                if (ImGui::SmallButton("+")) {
-                    group->setRenderSRVDescriptorIndex(group->getRenderSRVDescriptorIndex() + 1);
-                }
-                ImGui::PopID();
-
-                if (group->getRenderSRVDescriptorIndex() != 0) {
-                    ImGui::SameLine();
-
-                    ImGui::PushID(1);
-                    if (ImGui::SmallButton("-")) {
-                        group->setRenderSRVDescriptorIndex(group->getRenderSRVDescriptorIndex() - 1);
-                    }
-                    ImGui::PopID();
-                }
-
-                if (!instance.GetTrackDescriptors()) {
-                    ImGui::EndDisabled();
+                    ImGui::TreePop();
                 }
             } else {
-                group->setRenderToResourceViews(false);
-
-                ImGui::TableNextColumn();
-                ImGui::Text("Render target index");
-                ImGui::TableNextColumn();
-                ImGui::Text("%u", group->getRenderTargetIndex());
-                ImGui::SameLine();
-
-                if (ImGui::SmallButton("+")) {
-                    group->setRenderTargetIndex(group->getRenderTargetIndex() + 1);
-                }
-
-                if (group->getRenderTargetIndex() != 0) {
-                    ImGui::SameLine();
-
-                    if (ImGui::SmallButton("-")) {
-                        group->setRenderTargetIndex(group->getRenderTargetIndex() - 1);
-                    }
-                }
-
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-
-                ImGui::Text("Invocation location");
-                ImGui::TableNextColumn();
-                if (ImGui::BeginCombo("##Invocationlocation", typeSelectedItem, ImGuiComboFlags_None)) {
-                    for (int n = 0; n < IM_ARRAYSIZE(invocationDescription); n++) {
-                        bool is_selected = (typeSelectedItem == invocationDescription[n]);
-                        if (ImGui::Selectable(invocationDescription[n], is_selected)) {
-                            typeSelectedItem = invocationDescription[n];
-                            selectedIndex = n;
+                if (supportsSRVwrite) {
+                    ImGui::TableNextColumn();
+                    ImGui::Text("Render destination");
+                    ImGui::TableNextColumn();
+                    if (ImGui::BeginCombo("##Renderdestination", typeSelectedDestItem, ImGuiComboFlags_None)) {
+                        for (int n = 0; n < IM_ARRAYSIZE(typeDestItems); n++) {
+                            const bool is_selected = (typeSelectedDestItem == typeDestItems[n]);
+                            if (ImGui::Selectable(typeDestItems[n], is_selected)) {
+                                typeSelectedDestItem = typeDestItems[n];
+                                selectedDestIndex = n;
+                            }
+                            if (is_selected)
+                                ImGui::SetItemDefaultFocus();
                         }
-                        if (is_selected)
-                            ImGui::SetItemDefaultFocus();
+                        ImGui::EndCombo();
                     }
-                    ImGui::EndCombo();
+                    ImGui::TableNextRow();
+                } else {
+                    selectedDestIndex = 0;
+                }
+
+                if (supportsSRVwrite && selectedDestIndex == 1) {
+                    if (!instance.GetTrackDescriptors()) {
+                        ImGui::BeginDisabled();
+                        group->setRenderToResourceViews(false);
+                    } else {
+                        group->setRenderToResourceViews(true);
+                    }
+
+                    ImGui::TableNextColumn();
+                    ImGui::Text("Shader Stage");
+                    ImGui::TableNextColumn();
+                    if (ImGui::BeginCombo("##RenderShaderStage", selectedStage, ImGuiComboFlags_None)) {
+                        for (int n = 0; n < IM_ARRAYSIZE(stageItems); n++) {
+                            const bool is_selected = (selectedStage == stageItems[n]);
+                            if (ImGui::Selectable(stageItems[n], is_selected)) {
+                                selectedStageIndex = n;
+                                selectedStage = stageItems[n];
+                            }
+                            if (is_selected)
+                                ImGui::SetItemDefaultFocus();
+                        }
+                        ImGui::EndCombo();
+                    }
+                    group->setRenderSRVShaderStage(selectedStageIndex);
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::Text("Slot");
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%u", group->getRenderSRVSlotIndex());
+                    ImGui::SameLine();
+                    ImGui::PushID(0);
+                    if (ImGui::SmallButton("+"))
+                        group->setRenderSRVSlotIndex(group->getRenderSRVSlotIndex() + 1);
+                    ImGui::PopID();
+                    if (group->getRenderSRVSlotIndex() != 0) {
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("-"))
+                            group->setRenderSRVSlotIndex(group->getRenderSRVSlotIndex() - 1);
+                    }
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::Text("Binding");
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%u", group->getRenderSRVDescriptorIndex());
+                    ImGui::SameLine();
+                    ImGui::PushID(2);
+                    if (ImGui::SmallButton("+"))
+                        group->setRenderSRVDescriptorIndex(group->getRenderSRVDescriptorIndex() + 1);
+                    ImGui::PopID();
+                    if (group->getRenderSRVDescriptorIndex() != 0) {
+                        ImGui::SameLine();
+                        ImGui::PushID(1);
+                        if (ImGui::SmallButton("-"))
+                            group->setRenderSRVDescriptorIndex(group->getRenderSRVDescriptorIndex() - 1);
+                        ImGui::PopID();
+                    }
+
+                    if (!instance.GetTrackDescriptors())
+                        ImGui::EndDisabled();
+                } else {
+                    group->setRenderToResourceViews(false);
+
+                    ImGui::TableNextColumn();
+                    ImGui::Text("Render target index");
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%u", group->getRenderTargetIndex());
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("+"))
+                        group->setRenderTargetIndex(group->getRenderTargetIndex() + 1);
+                    if (group->getRenderTargetIndex() != 0) {
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("-"))
+                            group->setRenderTargetIndex(group->getRenderTargetIndex() - 1);
+                    }
+
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::Text("Invocation location");
+                    ImGui::TableNextColumn();
+                    if (ImGui::BeginCombo("##Invocationlocation", typeSelectedItem, ImGuiComboFlags_None)) {
+                        for (int n = 0; n < IM_ARRAYSIZE(invocationDescription); n++) {
+                            const bool is_selected = (typeSelectedItem == invocationDescription[n]);
+                            if (ImGui::Selectable(invocationDescription[n], is_selected)) {
+                                typeSelectedItem = invocationDescription[n];
+                                selectedIndex = n;
+                            }
+                            if (is_selected)
+                                ImGui::SetItemDefaultFocus();
+                        }
+                        ImGui::EndCombo();
+                    }
                 }
             }
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-
             ImGui::Text("Retry RT assignment");
             ImGui::TableNextColumn();
             ImGui::Checkbox("##RetryRTassignment", &retry);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-
             ImGui::Text("Apply tone map clamping");
             ImGui::TableNextColumn();
             ImGui::Checkbox("##tonemap", &tonemap);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-
             ImGui::Text("Flip render target");
             ImGui::TableNextColumn();
             ImGui::Checkbox("##flipbuffer", &flipbuffer);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-
             ImGui::Text("Preserve target alpha channel");
             ImGui::TableNextColumn();
+            if (autoSceneColourActive)
+                ImGui::BeginDisabled();
             ImGui::Checkbox("##preserveAlpha", &preserveAlpha);
+            if (autoSceneColourActive) {
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::TextDisabled("ignored while Auto scene colour is active");
+            }
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-
             ImGui::Text("Match swapchain");
             ImGui::TableNextColumn();
-            if (ImGui::BeginCombo("##effSwapChainMatchMode", typesSelectedSwapchainMatchMode, ImGuiComboFlags_None)) {
+            if (autoSceneColourActive) {
+                ImGui::TextUnformatted("ASPECT RATIO (automatic)");
+            } else if (ImGui::BeginCombo("##effSwapChainMatchMode", typesSelectedSwapchainMatchMode, ImGuiComboFlags_None)) {
                 for (int n = 0; n < IM_ARRAYSIZE(swapchainMatchOptions); n++) {
-                    bool is_selected = (typesSelectedSwapchainMatchMode == swapchainMatchOptions[n]);
+                    const bool is_selected = (typesSelectedSwapchainMatchMode == swapchainMatchOptions[n]);
                     if (ImGui::Selectable(swapchainMatchOptions[n], is_selected)) {
                         typesSelectedSwapchainMatchMode = swapchainMatchOptions[n];
                         selectedSwapchainMatchMode = n;
@@ -569,7 +824,6 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-
             ImGui::Text("Suppress draw calls");
             ImGui::TableNextColumn();
             ImGui::Checkbox("##SuppressDrawCall", &suppressDraw);
@@ -625,6 +879,7 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
 
         group->setRequeueAfterRTMatchingFailure(retry);
         group->setMatchSwapchainResolution(selectedSwapchainMatchMode);
+        group->setAutoRenderSRV(autoSceneColour);
         group->setInvocationLocation(selectedIndex);
         group->setToneMap(tonemap);
         group->setPreserveAlpha(preserveAlpha);
@@ -632,7 +887,6 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
         group->setSuppressDrawCall(suppressDraw);
 
         ImGui::Separator();
-
         DisplayTechniqueSelection(runtime, instance, group, ImGui::GetWindowWidth() / 3);
 
         ImGui::PopStyleVar();
@@ -650,118 +904,15 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
     ImGui::PopStyleVar();
 }
 
-static uint32_t s_selectedShaderTypeIndex = 0;
-
-static void SwitchEditingShaderType(AddonImGui::AddonUIData& instance, uint32_t newIndex) {
-    if (newIndex > 2)
-        return;
-    if (newIndex != s_selectedShaderTypeIndex) {
-        s_selectedShaderTypeIndex = newIndex;
-        switch (newIndex) {
-            case 0:
-                instance.GetVertexShaderManager()->resetActiveHuntedShader();
-                instance.GetComputeShaderManager()->resetActiveHuntedShader();
-                break;
-            case 1:
-                instance.GetPixelShaderManager()->resetActiveHuntedShader();
-                instance.GetComputeShaderManager()->resetActiveHuntedShader();
-                break;
-            case 2:
-                instance.GetPixelShaderManager()->resetActiveHuntedShader();
-                instance.GetVertexShaderManager()->resetActiveHuntedShader();
-                break;
-        }
-        instance.UpdateToggleGroupsForShaderHashes();
-    }
-}
-
-static void DisplayGroupView(AddonImGui::AddonUIData& instance,
-                             Rendering::ResourceManager& resManager,
-                             reshade::api::effect_runtime* runtime,
-                             ShaderToggler::ToggleGroup* group,
-                             ShaderToggler::ShaderManager* shaderManager) {
-    if (instance.ActiveCollectorFrameCounter()->load() > 0) {
-        ImGui::Text("Collecting active shaders (%u)...", static_cast<uint32_t>(instance.ActiveCollectorFrameCounter()->load()));
-        return;
-    }
-
-    const std::unordered_set<uint32_t>& hashes = shaderManager->getCollectedShaderHashes();
-    if (hashes.empty()) {
-        ImGui::TextDisabled("No active shaders collected.");
-        ImGui::TextWrapped("Make sure 3D rendering is active or increase '# of frames to collect' in Settings.");
-        return;
-    }
-
-    static int32_t lastScrolledIndex = -1;
-    const int32_t activeIndex = shaderManager->getActiveHuntedShaderIndex();
-    uint32_t index = 0;
-
-    float availHeight = ImGui::GetContentRegionAvail().y;
-    if (availHeight < 50.0f) {
-        availHeight = 200.0f;
-    }
-
-    if (ImGui::BeginTable("ShaderHashView",
-                          1,
-                          ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoBordersInBody |
-                            ImGuiTableColumnFlags_NoHeaderLabel,
-                          ImVec2(0, availHeight))) {
-        for (auto h : hashes) {
-            ImGui::TableNextColumn();
-
-            bool marked = shaderManager->isHuntedShaderMarked(h);
-            if (marked) {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
-            }
-
-            const bool isSelected = (activeIndex == static_cast<int32_t>(index));
-            if (ImGui::Selectable(std::format("{:#08x}", h).c_str(), isSelected, ImGuiSelectableFlags_AllowDoubleClick)) {
-                shaderManager->setActivedHuntedShaderIndex(index);
-                instance.UpdateToggleGroupsForShaderHashes();
-
-                if (ImGui::IsMouseDoubleClicked(0)) {
-                    shaderManager->toggleMarkOnHuntedShader();
-                    instance.UpdateToggleGroupsForShaderHashes();
-                }
-            }
-
-            if (marked) {
-                ImGui::PopStyleColor();
-            }
-
-            if (ImGui::IsItemFocused() && (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_DownArrow)) && activeIndex != static_cast<int32_t>(index)) {
-                shaderManager->setActivedHuntedShaderIndex(index);
-                instance.UpdateToggleGroupsForShaderHashes();
-            }
-
-            if (isSelected && ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
-                shaderManager->toggleMarkOnHuntedShader();
-                instance.UpdateToggleGroupsForShaderHashes();
-            }
-
-            if (isSelected && lastScrolledIndex != activeIndex) {
-                ImGui::SetScrollHereY(0.5f);
-                lastScrolledIndex = activeIndex;
-            }
-
-            index++;
-        }
-
-        ImGui::EndTable();
-    }
-}
-
 static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
                                    ShaderToggler::ToggleGroup* group,
                                    reshade::api::effect_runtime* runtime,
                                    Rendering::ResourceManager& resManager) {
     static float height = ImGui::GetWindowHeight();
-    float width = ImGui::GetWindowWidth();
 
     const char* typeItems[] = { "Render target", "Shader Resource View" };
     uint32_t selectedIndex = group->getExtractResourceViews() ? 1 : 0;
     const char* typeSelectedItem = typeItems[selectedIndex];
-    DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
 
     static const char* swapchainMatchOptions[] = { "RESOLUTION", "ASPECT RATIO", "EXTENDED ASPECT RATIO", "NONE" };
     uint32_t selectedSwapchainMatchMode = group->getBindingMatchSwapchainResolution();
@@ -775,10 +926,7 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
     if (ImGui::BeginChild("Texture bindings viewer", { 0, height / 2.0f }, true, ImGuiChildFlags_AlwaysAutoResize)) {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
 
-        // Name of group
-        char tmpBuffer[150];
-
-        // Name of Binding
+        char tmpBuffer[150] = {};
         bool isBindingEnabled = group->isProvidingTextureBinding();
 
         const std::string& bindingName = group->getTextureBindingName();
@@ -852,7 +1000,6 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
             ImGui::Checkbox("##Clearbinding", &clearBinding);
 
             ImGui::TableNextRow();
-
             ImGui::TableNextColumn();
 
             ImGui::EndTable();
@@ -908,7 +1055,6 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
 
                 if (group->getBindingSRVSlotIndex() != 0) {
                     ImGui::SameLine();
-
                     if (ImGui::SmallButton("-")) {
                         group->setBindingSRVSlotIndex(group->getBindingSRVSlotIndex() - 1);
                     }
@@ -929,7 +1075,6 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
 
                 if (group->getBindingSRVDescriptorIndex() != 0) {
                     ImGui::SameLine();
-
                     ImGui::PushID(1);
                     if (ImGui::SmallButton("-")) {
                         group->dispatchSRVCycle(ShaderToggler::CYCLE_DOWN);
@@ -960,7 +1105,6 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
 
                 if (group->getBindingRenderTargetIndex() != 0) {
                     ImGui::SameLine();
-
                     if (ImGui::SmallButton("-")) {
                         group->setBindingRenderTargetIndex(group->getBindingRenderTargetIndex() - 1);
                     }
@@ -1034,13 +1178,279 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
     ImGui::PopStyleVar();
 }
 
+static void DisplayGroupView(AddonImGui::AddonUIData& instance,
+                             Rendering::ResourceManager& resManager,
+                             reshade::api::effect_runtime* runtime,
+                             ShaderToggler::ToggleGroup* group,
+                             ShaderToggler::ShaderManager* shaderManager) {
+    if (!shaderManager->isInHuntingMode()) {
+        ImGui::TextDisabled("Shader hunting is not active.");
+        ImGui::TextWrapped("The group's committed shader hashes remain active while you inspect Auto Scene Colour and other settings.");
+        return;
+    }
+
+    if (*instance.ActiveCollectorFrameCounter() > 0) {
+        ImGui::Text("Collecting active shaders... %u frames remaining", instance.ActiveCollectorFrameCounter()->load());
+        ImGui::TextDisabled("Keep the relevant scene visible until collection finishes.");
+        return;
+    }
+
+    auto& huntingUI = instance.GetHuntingUIState();
+    char* shaderSearch = huntingUI.shaderSearch;
+    int& filterMode = huntingUI.filterMode;
+    const char* filterItems[] = { "All", "Marked", "Unmarked" };
+
+    if (ImGui::BeginTable("ShaderHuntSearch", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
+        ImGui::TableSetupColumn("Search", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Filter", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+        ImGui::TableSetupColumn("Rescan", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputTextWithHint("##shaderSearch", "Search shader hash...", shaderSearch, 64);
+
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::Combo("##shaderFilter", &filterMode, filterItems, IM_ARRAYSIZE(filterItems));
+
+        ImGui::TableNextColumn();
+        if (ImGui::Button("Rescan", ImVec2(-1.0f, 0))) {
+            auto* pixelManager = instance.GetPixelShaderManager();
+            auto* vertexManager = instance.GetVertexShaderManager();
+            auto* computeManager = instance.GetComputeShaderManager();
+            pixelManager->startHuntingMode(pixelManager->getMarkedShaderHashes());
+            vertexManager->startHuntingMode(vertexManager->getMarkedShaderHashes());
+            computeManager->startHuntingMode(computeManager->getMarkedShaderHashes());
+            *instance.ActiveCollectorFrameCounter() = *instance.StartValueFramecountCollectionPhase();
+            instance.UpdateToggleGroupsForShaderHashes();
+            ImGui::EndTable();
+            return;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Recollect active shaders for the configured number of frames.");
+
+        ImGui::EndTable();
+    }
+
+    auto repeatButton = [](const char* label) {
+        ImGui::PushButtonRepeat(true);
+        const bool pressed = ImGui::Button(label, ImVec2(-1.0f, 0));
+        ImGui::PopButtonRepeat();
+        return pressed;
+    };
+
+    bool navigationChanged = false;
+
+    // Navigation row.
+    if (ImGui::BeginTable("ShaderHuntNavigation", 4, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoBordersInBody)) {
+        ImGui::TableNextColumn();
+        if (repeatButton("Prev")) {
+            shaderManager->huntPreviousShader(false);
+            navigationChanged = true;
+        }
+
+        ImGui::TableNextColumn();
+        if (repeatButton("Next")) {
+            shaderManager->huntNextShader(false);
+            navigationChanged = true;
+        }
+
+        ImGui::TableNextColumn();
+        if (repeatButton("Prev marked")) {
+            shaderManager->huntPreviousShader(true);
+            navigationChanged = true;
+        }
+
+        ImGui::TableNextColumn();
+        if (repeatButton("Next marked")) {
+            shaderManager->huntNextShader(true);
+            navigationChanged = true;
+        }
+
+        ImGui::EndTable();
+    }
+
+    const size_t markedCount = shaderManager->getMarkedShaderCount();
+    const uint32_t activeHuntedHash = shaderManager->getActiveHuntedShaderHash();
+
+    // Mark/action row.
+    if (ImGui::BeginTable("ShaderHuntActions", 5, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoBordersInBody)) {
+        ImGui::TableNextColumn();
+        if (ImGui::Button("Mark / unmark", ImVec2(-1.0f, 0))) {
+            shaderManager->toggleMarkOnHuntedShader();
+            navigationChanged = true;
+        }
+
+        ImGui::TableNextColumn();
+        if (repeatButton("Mark + Prev")) {
+            shaderManager->toggleMarkOnHuntedShader();
+            shaderManager->huntPreviousShader(false);
+            navigationChanged = true;
+        }
+
+        ImGui::TableNextColumn();
+        if (repeatButton("Mark + Next")) {
+            shaderManager->toggleMarkOnHuntedShader();
+            shaderManager->huntNextShader(false);
+            navigationChanged = true;
+        }
+
+        ImGui::TableNextColumn();
+        if (activeHuntedHash == 0)
+            ImGui::BeginDisabled();
+        if (ImGui::Button("Copy hash", ImVec2(-1.0f, 0))) {
+            const std::string hashText = std::format("0x{:08x}", activeHuntedHash);
+            ImGui::SetClipboardText(hashText.c_str());
+        }
+        if (activeHuntedHash == 0)
+            ImGui::EndDisabled();
+
+        ImGui::TableNextColumn();
+        if (markedCount == 0)
+            ImGui::BeginDisabled();
+        if (ImGui::Button("Clear marked", ImVec2(-1.0f, 0))) {
+            shaderManager->clearMarkedShaderHashes();
+            navigationChanged = true;
+        }
+        if (markedCount == 0)
+            ImGui::EndDisabled();
+
+        ImGui::EndTable();
+    }
+
+    if (navigationChanged)
+        instance.UpdateToggleGroupsForShaderHashes();
+
+    const std::vector<uint32_t> hashes = shaderManager->getCollectedShaderHashesOrdered();
+    const std::unordered_set<uint32_t> collectedSet(hashes.begin(), hashes.end());
+    const std::unordered_set<uint32_t> markedHashes = shaderManager->getMarkedShaderHashes();
+
+    std::vector<uint32_t> missingMarkedHashes;
+    missingMarkedHashes.reserve(markedHashes.size());
+    for (const uint32_t hash : markedHashes) {
+        if (!collectedSet.contains(hash))
+            missingMarkedHashes.push_back(hash);
+    }
+    std::sort(missingMarkedHashes.begin(), missingMarkedHashes.end());
+
+    ImGui::TextDisabled("%zu collected | %zu marked | %zu not seen",
+                        hashes.size(),
+                        markedCount,
+                        missingMarkedHashes.size());
+    if (!missingMarkedHashes.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.25f, 0.25f, 1.0f));
+        ImGui::TextUnformatted("Red = marked but not observed during the latest collection pass.");
+        ImGui::PopStyleColor();
+    }
+    ImGui::TextWrapped("Pending shader marks are applied to the group when you click Done.");
+    ImGui::Separator();
+
+    const uint32_t selectedHash = shaderManager->getActiveHuntedShaderHash();
+
+    std::string needle(shaderSearch);
+    std::transform(needle.begin(), needle.end(), needle.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+    struct ShaderListEntry {
+        uint32_t hash;
+        bool collected;
+    };
+
+    std::vector<ShaderListEntry> visibleHashes;
+    visibleHashes.reserve(hashes.size() + missingMarkedHashes.size());
+
+    auto addIfVisible = [&](uint32_t hash, bool collected) {
+        const bool marked = shaderManager->isHuntedShaderMarked(hash);
+        const std::string hashText = std::format("{:#08x}", hash);
+
+        bool visible = filterMode == 0 || (filterMode == 1 && marked) || (filterMode == 2 && collected && !marked);
+        if (visible && !needle.empty()) {
+            std::string haystack = hashText;
+            std::transform(haystack.begin(), haystack.end(), haystack.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            visible = haystack.find(needle) != std::string::npos;
+        }
+
+        if (visible)
+            visibleHashes.push_back({ hash, collected });
+    };
+
+    for (const uint32_t hash : hashes)
+        addIfVisible(hash, true);
+    for (const uint32_t hash : missingMarkedHashes)
+        addIfVisible(hash, false);
+
+    const float listWidth = ImGui::GetContentRegionAvail().x;
+    const int hashColumns = visibleHashes.size() >= 50 && listWidth >= 500.0f ? 2 : 1;
+    const float listHeight = std::max(120.0f, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - 6.0f);
+
+    if (ImGui::BeginTable("ShaderHashView",
+                          hashColumns,
+                          ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_ScrollY |
+                            ImGuiTableFlags_NoBordersInBody,
+                          ImVec2(0, listHeight))) {
+        auto drawHash = [&](const ShaderListEntry& entry) {
+            const uint32_t hash = entry.hash;
+            const bool marked = shaderManager->isHuntedShaderMarked(hash);
+            const bool missing = marked && !entry.collected;
+            const std::string hashText = std::format("{:#08x}", hash);
+
+            if (missing)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.25f, 0.25f, 1.0f));
+            else if (marked)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
+
+            const bool clicked =
+              ImGui::Selectable(hashText.c_str(), entry.collected && selectedHash == hash, ImGuiSelectableFlags_AllowDoubleClick);
+
+            if (entry.collected) {
+                if (clicked && shaderManager->setActiveHuntedShaderHash(hash)) {
+                    if (ImGui::IsMouseDoubleClicked(0))
+                        shaderManager->toggleMarkOnHuntedShader();
+                    instance.UpdateToggleGroupsForShaderHashes();
+                }
+            } else {
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Marked shader not observed during the latest collection pass.\nIt may be scene/state dependent rather than invalid.\nDouble-click to unmark it.");
+                if (clicked && ImGui::IsMouseDoubleClicked(0) && shaderManager->removeMarkedShaderHash(hash))
+                    instance.UpdateToggleGroupsForShaderHashes();
+            }
+
+            if (missing || marked)
+                ImGui::PopStyleColor();
+        };
+
+        if (hashColumns == 1) {
+            for (const ShaderListEntry& entry : visibleHashes) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                drawHash(entry);
+            }
+        } else {
+            const size_t rows = (visibleHashes.size() + 1) / 2;
+            for (size_t row = 0; row < rows; ++row) {
+                ImGui::TableNextRow();
+
+                ImGui::TableSetColumnIndex(0);
+                drawHash(visibleHashes[row]);
+
+                const size_t rightIndex = row + rows;
+                if (rightIndex < visibleHashes.size()) {
+                    ImGui::TableSetColumnIndex(1);
+                    drawHash(visibleHashes[rightIndex]);
+                }
+            }
+        }
+
+        ImGui::EndTable();
+    }
+}
+
 static std::atomic<bool> s_imguiWantTextInput = false;
 
 static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::ResourceManager& resManager, reshade::api::effect_runtime* runtime) {
     s_imguiWantTextInput.store(ImGui::GetIO().WantTextInput);
-    if (instance.GetToggleGroupIdShaderEditing() >= 0) {
+    if (instance.GetToggleGroupIdSettingsOpen() >= 0) {
         std::string editingGroupName = "";
-        const int idx = instance.GetToggleGroupIdShaderEditing();
+        const int idx = instance.GetToggleGroupIdSettingsOpen();
         ShaderToggler::ToggleGroup* group = nullptr;
         if (instance.GetToggleGroups().find(idx) != instance.GetToggleGroups().end()) {
             editingGroupName = instance.GetToggleGroups()[idx].getName();
@@ -1051,30 +1461,72 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
             return;
 
         ImGui::SetNextWindowBgAlpha(1.0);
-        ImGui::SetNextWindowSize({ 1024, 768 }, ImGuiCond_Once);
+        ImGui::SetNextWindowSize({ 1280, 800 }, ImGuiCond_Once);
         bool wndOpen = true;
 
-        static float height = ImGui::GetWindowHeight();
-        static float width = ImGui::GetWindowWidth();
-
+        auto& huntingUIState = instance.GetHuntingUIState();
         const char* typeItems[] = { "Pixel shader", "Vertex shader", "Compute Shader" };
+        uint32_t& selectedIndex = huntingUIState.selectedShaderType;
+        selectedIndex = std::min<uint32_t>(selectedIndex, 2);
+        const char* typeSelectedItem = typeItems[selectedIndex];
 
         ShaderToggler::ShaderManager* selectedShaderManager =
-          s_selectedShaderTypeIndex == 0 ? instance.GetPixelShaderManager() : (s_selectedShaderTypeIndex == 1 ? instance.GetVertexShaderManager() : instance.GetComputeShaderManager());
+          selectedIndex == 0 ? instance.GetPixelShaderManager() : (selectedIndex == 1 ? instance.GetVertexShaderManager() : instance.GetComputeShaderManager());
 
         if (ImGui::Begin(std::format("Group settings ({})", editingGroupName).c_str(), &wndOpen)) {
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-            if (ImGui::BeginChild("GroupView", { width / 3.0f, 0 }, true, ImGuiWindowFlags_NoScrollbar)) {
+
+            const float splitterWidth = 8.0f;
+            const float horizontalSpacing = ImGui::GetStyle().ItemSpacing.x * 2.0f;
+            const float availableWidth = ImGui::GetContentRegionAvail().x;
+            const float maxShaderPaneWidth = std::max(300.0f, availableWidth - 420.0f - splitterWidth - horizontalSpacing);
+            huntingUIState.shaderPaneWidth = std::clamp(huntingUIState.shaderPaneWidth, 300.0f, maxShaderPaneWidth);
+
+            if (ImGui::BeginChild("GroupView", { huntingUIState.shaderPaneWidth, 0 }, true, ImGuiWindowFlags_NoScrollbar)) {
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
 
+                const bool huntingThisGroup = instance.GetToggleGroupIdShaderEditing().load() == group->getId();
+                if (huntingThisGroup) {
+                    if (ImGui::Button("Done hunting")) {
+                        instance.EndShaderEditing(true, *group);
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("Marks will be committed to this group.");
+                } else {
+                    if (ImGui::Button("Start shader hunting"))
+                        instance.StartShaderEditing(*group);
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("Settings remain open when hunting finishes.");
+                }
+
                 ImGui::PushItemWidth(ImGui::GetWindowWidth() - ImGui::GetStyle().FramePadding.x * 2 - ImGui::GetStyle().ItemSpacing.x * 2);
-                if (ImGui::BeginCombo("##shaderType", typeItems[s_selectedShaderTypeIndex], ImGuiComboFlags_None)) {
+                if (ImGui::BeginCombo("##shaderType", typeSelectedItem, ImGuiComboFlags_None)) {
                     for (int n = 0; n < IM_ARRAYSIZE(typeItems); n++) {
-                        bool is_selected = (s_selectedShaderTypeIndex == static_cast<uint32_t>(n));
+                        bool is_selected = (typeSelectedItem == typeItems[n]);
                         if (ImGui::Selectable(typeItems[n], is_selected)) {
-                            if (static_cast<uint32_t>(n) != s_selectedShaderTypeIndex) {
-                                SwitchEditingShaderType(instance, n);
+                            if (n != selectedIndex) {
+                                switch (n) {
+                                    case 0: {
+                                        instance.GetVertexShaderManager()->resetActiveHuntedShader();
+                                        instance.GetComputeShaderManager()->resetActiveHuntedShader();
+                                    } break;
+                                    case 1: {
+                                        instance.GetPixelShaderManager()->resetActiveHuntedShader();
+                                        instance.GetComputeShaderManager()->resetActiveHuntedShader();
+                                    } break;
+                                    case 2: {
+                                        instance.GetPixelShaderManager()->resetActiveHuntedShader();
+                                        instance.GetVertexShaderManager()->resetActiveHuntedShader();
+                                    } break;
+                                    default:
+                                        break;
+                                }
+
+                                instance.UpdateToggleGroupsForShaderHashes();
                             }
+
+                            typeSelectedItem = typeItems[n];
+                            selectedIndex = n;
                         }
                         if (is_selected)
                             ImGui::SetItemDefaultFocus();
@@ -1083,29 +1535,7 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
                 }
                 ImGui::PopItemWidth();
 
-                bool hideHunted = selectedShaderManager->isHideHuntedShader();
-                if (ImGui::Checkbox("Hide hunted shader in 3D scene", &hideHunted)) {
-                    instance.GetPixelShaderManager()->setHideHuntedShader(hideHunted);
-                    instance.GetVertexShaderManager()->setHideHuntedShader(hideHunted);
-                    instance.GetComputeShaderManager()->setHideHuntedShader(hideHunted);
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("When enabled, the currently selected shader is disabled in the 3D scene so you can identify it.");
-                }
-
-                bool hideMarked = selectedShaderManager->isHideMarkedShaders();
-                if (ImGui::Checkbox("Hide marked shaders", &hideMarked)) {
-                    instance.GetPixelShaderManager()->setHideMarkedShaders(hideMarked);
-                    instance.GetVertexShaderManager()->setHideMarkedShaders(hideMarked);
-                    instance.GetComputeShaderManager()->setHideMarkedShaders(hideMarked);
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("When enabled, all shaders currently marked in this group are disabled in the 3D scene.");
-                }
-
-                ImGui::Separator();
-
-                // Live draw call stats for active hunted shader
+                // Live draw call stats for active hunted shader (Phase 3 Geometry Refinement)
                 const auto observedDraws = selectedShaderManager->getObservedDrawGeometries();
                 if (!observedDraws.empty()) {
                     ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Observed Draws for Active Shader (%zu):", observedDraws.size());
@@ -1168,15 +1598,100 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
             ImGui::SameLine();
 
             ImGui::PushID(0);
-            ImGui::Button("", ImVec2(8.0f, -1));
+            ImGui::Button("", ImVec2(splitterWidth, -1));
             ImGui::PopID();
-            if (ImGui::IsItemActive())
-                width += ImGui::GetIO().MouseDelta.x;
+            if (ImGui::IsItemActive()) {
+                huntingUIState.shaderPaneWidth =
+                  std::clamp(huntingUIState.shaderPaneWidth + ImGui::GetIO().MouseDelta.x, 300.0f, maxShaderPaneWidth);
+            }
 
             ImGui::SameLine();
 
             if (ImGui::BeginChild("GroupSettings", { 0, 0 }, true, ImGuiChildFlags_AlwaysAutoResize)) {
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
+
+                bool hideMarkedShaders = group->getHideMarkedShaders();
+                if (ImGui::Checkbox("Hide marked shaders", &hideMarkedShaders))
+                    group->setHideMarkedShaders(hideMarkedShaders);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Suppress graphics draws matching this group's marked pixel or vertex shaders while the group is active.\nUseful for HUD-free screenshots, shader identification and configuration testing.\nCompute dispatches are not suppressed.");
+
+                if (hideMarkedShaders)
+                    ImGui::TextDisabled("Matching graphics draws are suppressed while this group is active.");
+
+                ImGui::SameLine();
+                bool suppressDraw = group->getSuppressDrawCall();
+                if (ImGui::Checkbox("Suppress draw calls", &suppressDraw))
+                    group->setSuppressDrawCall(suppressDraw);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("When enabled and this group is active, draw calls using this group's shaders are suppressed directly on the GPU.");
+
+                if (ImGui::TreeNode("Geometry Refine Filters")) {
+                    bool matchIdx = group->getMatchIndexCount();
+                    if (ImGui::Checkbox("Filter by index count", &matchIdx))
+                        group->setMatchIndexCount(matchIdx);
+                    if (matchIdx) {
+                        ImGui::SameLine();
+                        int idxMin = static_cast<int>(group->getIndexCountMin());
+                        int idxMax = static_cast<int>(group->getIndexCountMax());
+                        ImGui::SetNextItemWidth(80.0f);
+                        if (ImGui::InputInt("Min##IdxOverlay", &idxMin, 0))
+                            group->setIndexCountMin(std::max(0, idxMin));
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(80.0f);
+                        if (ImGui::InputInt("Max##IdxOverlay", &idxMax, 0))
+                            group->setIndexCountMax(std::max(0, idxMax));
+                    }
+
+                    bool matchVtx = group->getMatchVertexCount();
+                    if (ImGui::Checkbox("Filter by vertex count", &matchVtx))
+                        group->setMatchVertexCount(matchVtx);
+                    if (matchVtx) {
+                        ImGui::SameLine();
+                        int vtxMin = static_cast<int>(group->getVertexCountMin());
+                        int vtxMax = static_cast<int>(group->getVertexCountMax());
+                        ImGui::SetNextItemWidth(80.0f);
+                        if (ImGui::InputInt("Min##VtxOverlay", &vtxMin, 0))
+                            group->setVertexCountMin(std::max(0, vtxMin));
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(80.0f);
+                        if (ImGui::InputInt("Max##VtxOverlay", &vtxMax, 0))
+                            group->setVertexCountMax(std::max(0, vtxMax));
+                    }
+
+                    bool matchInst = group->getMatchInstanceCount();
+                    if (ImGui::Checkbox("Filter by instance count", &matchInst))
+                        group->setMatchInstanceCount(matchInst);
+                    if (matchInst) {
+                        ImGui::SameLine();
+                        int instMin = static_cast<int>(group->getInstanceCountMin());
+                        int instMax = static_cast<int>(group->getInstanceCountMax());
+                        ImGui::SetNextItemWidth(80.0f);
+                        if (ImGui::InputInt("Min##InstOverlay", &instMin, 0))
+                            group->setInstanceCountMin(std::max(0, instMin));
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(80.0f);
+                        if (ImGui::InputInt("Max##InstOverlay", &instMax, 0))
+                            group->setInstanceCountMax(std::max(0, instMax));
+                    }
+
+                    if (group->hasGeometryFilter()) {
+                        if (ImGui::Button("Clear Geometry Filters##Overlay")) {
+                            group->setMatchIndexCount(false);
+                            group->setMatchVertexCount(false);
+                            group->setMatchInstanceCount(false);
+                            group->setIndexCountMin(0);
+                            group->setIndexCountMax(0);
+                            group->setVertexCountMin(0);
+                            group->setVertexCountMax(0);
+                            group->setInstanceCountMin(0);
+                            group->setInstanceCountMax(0);
+                        }
+                    }
+                    ImGui::TreePop();
+                }
+
+                ImGui::Separator();
 
                 ImGuiTabBarFlags tab_bar_flags = ImGuiTabBarFlags_None;
                 if (ImGui::BeginTabBar("MyTabBar", tab_bar_flags)) {
@@ -1207,9 +1722,8 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
         ImGui::End();
 
         if (!wndOpen) {
-            s_selectedShaderTypeIndex = 0;
             instance.SetCurrentTabType(AddonImGui::TAB_NONE);
-            instance.EndShaderEditing(true, *group);
+            instance.CloseGroupSettings(true, *group);
         }
     } else {
         instance.SetCurrentTabType(AddonImGui::TAB_NONE);
@@ -1220,76 +1734,99 @@ static void CheckHotkeys(AddonImGui::AddonUIData& instance, reshade::api::effect
     auto& gpMonitor = ShaderToggler::GamepadMonitor::getInstance();
     gpMonitor.update();
 
-    if (*instance.ActiveCollectorFrameCounter() > 0) {
+    if (*instance.ActiveCollectorFrameCounter() > 0)
         --(*instance.ActiveCollectorFrameCounter());
-        return;
-    }
 
-    // When the user is editing shaders in the overlay, process hunting hotkeys
-    // instead of normal group toggle keys so the user can cycle and mark shaders.
+    auto pressedKeys = [&](uint32_t keys) {
+        if (keys == 0 || !ShaderToggler::areKeysPressed(keys, runtime))
+            return false;
+
+        const bool wantsCtrl = ((keys >> 8) & 0xFF) != 0;
+        const bool wantsShift = ((keys >> 16) & 0xFF) != 0;
+        const bool wantsAlt = ((keys >> 24) & 0xFF) != 0;
+
+        return wantsCtrl == runtime->is_key_down(VK_CONTROL) &&
+               wantsShift == runtime->is_key_down(VK_SHIFT) &&
+               wantsAlt == runtime->is_key_down(VK_MENU);
+    };
+
+    auto pressed = [&](AddonImGui::Keybind binding) {
+        return pressedKeys(instance.GetKeybinding(binding));
+    };
+
+    auto handleHunting = [&](ShaderToggler::ShaderManager* manager,
+                             AddonImGui::Keybind previous,
+                             AddonImGui::Keybind next,
+                             AddonImGui::Keybind mark,
+                             AddonImGui::Keybind previousMarked,
+                             AddonImGui::Keybind nextMarked,
+                             AddonImGui::Keybind markPrevious,
+                             AddonImGui::Keybind markNext) {
+        bool changed = false;
+
+        if (pressed(markPrevious)) {
+            manager->toggleMarkOnHuntedShader();
+            manager->huntPreviousShader(false);
+            return true;
+        }
+        if (pressed(markNext)) {
+            manager->toggleMarkOnHuntedShader();
+            manager->huntNextShader(false);
+            return true;
+        }
+
+        if (pressed(previousMarked)) {
+            manager->huntPreviousShader(true);
+            changed = true;
+        } else if (pressed(nextMarked)) {
+            manager->huntNextShader(true);
+            changed = true;
+        } else if (pressed(previous)) {
+            manager->huntPreviousShader(false);
+            changed = true;
+        } else if (pressed(next)) {
+            manager->huntNextShader(false);
+            changed = true;
+        }
+
+        if (pressed(mark)) {
+            manager->toggleMarkOnHuntedShader();
+            changed = true;
+        }
+
+        return changed;
+    };
+
     if (instance.GetToggleGroupIdShaderEditing() >= 0) {
         if (!s_imguiWantTextInput.load()) {
-            // Pixel shader keybindings
-            const uint32_t psMarkedUpKey = instance.GetKeybinding(AddonImGui::Keybind::PIXEL_SHADER_MARKED_UP);
-            const uint32_t psMarkedDownKey = instance.GetKeybinding(AddonImGui::Keybind::PIXEL_SHADER_MARKED_DOWN);
-            const uint32_t psUpKey = instance.GetKeybinding(AddonImGui::Keybind::PIXEL_SHADER_UP);
-            const uint32_t psDownKey = instance.GetKeybinding(AddonImGui::Keybind::PIXEL_SHADER_DOWN);
-            const uint32_t psMarkKey = instance.GetKeybinding(AddonImGui::Keybind::PIXEL_SHADER_MARK);
+            bool changed = false;
+            changed |= handleHunting(instance.GetPixelShaderManager(),
+                                     AddonImGui::PIXEL_SHADER_DOWN,
+                                     AddonImGui::PIXEL_SHADER_UP,
+                                     AddonImGui::PIXEL_SHADER_MARK,
+                                     AddonImGui::PIXEL_SHADER_MARKED_DOWN,
+                                     AddonImGui::PIXEL_SHADER_MARKED_UP,
+                                     AddonImGui::PIXEL_SHADER_MARK_PREV,
+                                     AddonImGui::PIXEL_SHADER_MARK_NEXT);
+            changed |= handleHunting(instance.GetVertexShaderManager(),
+                                     AddonImGui::VERTEX_SHADER_DOWN,
+                                     AddonImGui::VERTEX_SHADER_UP,
+                                     AddonImGui::VERTEX_SHADER_MARK,
+                                     AddonImGui::VERTEX_SHADER_MARKED_DOWN,
+                                     AddonImGui::VERTEX_SHADER_MARKED_UP,
+                                     AddonImGui::VERTEX_SHADER_MARK_PREV,
+                                     AddonImGui::VERTEX_SHADER_MARK_NEXT);
+            changed |= handleHunting(instance.GetComputeShaderManager(),
+                                     AddonImGui::COMPUTE_SHADER_DOWN,
+                                     AddonImGui::COMPUTE_SHADER_UP,
+                                     AddonImGui::COMPUTE_SHADER_MARK,
+                                     AddonImGui::COMPUTE_SHADER_MARKED_DOWN,
+                                     AddonImGui::COMPUTE_SHADER_MARKED_UP,
+                                     AddonImGui::COMPUTE_SHADER_MARK_PREV,
+                                     AddonImGui::COMPUTE_SHADER_MARK_NEXT);
 
-            // Vertex shader keybindings
-            const uint32_t vsMarkedUpKey = instance.GetKeybinding(AddonImGui::Keybind::VERTEX_SHADER_MARKED_UP);
-            const uint32_t vsMarkedDownKey = instance.GetKeybinding(AddonImGui::Keybind::VERTEX_SHADER_MARKED_DOWN);
-            const uint32_t vsUpKey = instance.GetKeybinding(AddonImGui::Keybind::VERTEX_SHADER_UP);
-            const uint32_t vsDownKey = instance.GetKeybinding(AddonImGui::Keybind::VERTEX_SHADER_DOWN);
-            const uint32_t vsMarkKey = instance.GetKeybinding(AddonImGui::Keybind::VERTEX_SHADER_MARK);
-
-            const bool ctrlDown = runtime->is_key_down(0x11);
-
-            // Pixel shader navigation
-            if (psMarkedUpKey != 0 && ShaderToggler::areKeysPressed(psMarkedUpKey, runtime)) {
-                SwitchEditingShaderType(instance, 0);
-                instance.GetPixelShaderManager()->huntNextShader(true);
+            if (changed)
                 instance.UpdateToggleGroupsForShaderHashes();
-            } else if (psMarkedDownKey != 0 && ShaderToggler::areKeysPressed(psMarkedDownKey, runtime)) {
-                SwitchEditingShaderType(instance, 0);
-                instance.GetPixelShaderManager()->huntPreviousShader(true);
-                instance.UpdateToggleGroupsForShaderHashes();
-            } else if (psUpKey != 0 && ShaderToggler::areKeysPressed(psUpKey, runtime) && ((psUpKey >> 8 & 0xFF) != 0 || !ctrlDown)) {
-                SwitchEditingShaderType(instance, 0);
-                instance.GetPixelShaderManager()->huntNextShader(false);
-                instance.UpdateToggleGroupsForShaderHashes();
-            } else if (psDownKey != 0 && ShaderToggler::areKeysPressed(psDownKey, runtime) && ((psDownKey >> 8 & 0xFF) != 0 || !ctrlDown)) {
-                SwitchEditingShaderType(instance, 0);
-                instance.GetPixelShaderManager()->huntPreviousShader(false);
-                instance.UpdateToggleGroupsForShaderHashes();
-            } else if (psMarkKey != 0 && ShaderToggler::areKeysPressed(psMarkKey, runtime)) {
-                SwitchEditingShaderType(instance, 0);
-                instance.GetPixelShaderManager()->toggleMarkOnHuntedShader();
-                instance.UpdateToggleGroupsForShaderHashes();
-            }
-
-            // Vertex shader navigation
-            if (vsMarkedUpKey != 0 && ShaderToggler::areKeysPressed(vsMarkedUpKey, runtime)) {
-                SwitchEditingShaderType(instance, 1);
-                instance.GetVertexShaderManager()->huntNextShader(true);
-                instance.UpdateToggleGroupsForShaderHashes();
-            } else if (vsMarkedDownKey != 0 && ShaderToggler::areKeysPressed(vsMarkedDownKey, runtime)) {
-                SwitchEditingShaderType(instance, 1);
-                instance.GetVertexShaderManager()->huntPreviousShader(true);
-                instance.UpdateToggleGroupsForShaderHashes();
-            } else if (vsUpKey != 0 && ShaderToggler::areKeysPressed(vsUpKey, runtime) && ((vsUpKey >> 8 & 0xFF) != 0 || !ctrlDown)) {
-                SwitchEditingShaderType(instance, 1);
-                instance.GetVertexShaderManager()->huntNextShader(false);
-                instance.UpdateToggleGroupsForShaderHashes();
-            } else if (vsDownKey != 0 && ShaderToggler::areKeysPressed(vsDownKey, runtime) && ((vsDownKey >> 8 & 0xFF) != 0 || !ctrlDown)) {
-                SwitchEditingShaderType(instance, 1);
-                instance.GetVertexShaderManager()->huntPreviousShader(false);
-                instance.UpdateToggleGroupsForShaderHashes();
-            } else if (vsMarkKey != 0 && ShaderToggler::areKeysPressed(vsMarkKey, runtime)) {
-                SwitchEditingShaderType(instance, 1);
-                instance.GetVertexShaderManager()->toggleMarkOnHuntedShader();
-                instance.UpdateToggleGroupsForShaderHashes();
-            }
         }
         return;
     }
@@ -1301,7 +1838,7 @@ static void CheckHotkeys(AddonImGui::AddonUIData& instance, reshade::api::effect
     const uint32_t toggleAllKey = instance.GetKeybinding(AddonImGui::Keybind::TOGGLE_ALL_GROUPS);
     const uint32_t toggleAllGamepad = instance.GetGamepadToggleAll();
     bool triggerToggleAll = false;
-    if (toggleAllKey != 0 && ShaderToggler::areKeysPressed(toggleAllKey, runtime)) {
+    if (toggleAllKey != 0 && pressedKeys(toggleAllKey)) {
         triggerToggleAll = true;
     }
     if (toggleAllGamepad != 0 && gpMonitor.isComboTriggered(toggleAllGamepad)) {
@@ -1329,7 +1866,7 @@ static void CheckHotkeys(AddonImGui::AddonUIData& instance, reshade::api::effect
     for (auto& [_, group] : groups) {
         bool triggered = false;
         const uint32_t key = group.getToggleKey();
-        if (key != 0 && ShaderToggler::areKeysPressed(key, runtime)) {
+        if (key != 0 && pressedKeys(key)) {
             triggered = true;
         }
         const uint32_t gpShortcut = group.getGamepadShortcut();
@@ -1366,20 +1903,17 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
         ImGui::PushTextWrapPos();
         ImGui::TextUnformatted(
           "The Shader Toggler allows you to create one or more groups with shaders to toggle on/off. You can assign a keyboard shortcut (including using keys "
-          "like Shift, Alt and Control) to each group, including a handy name. Each group can have one or more vertex or pixel shaders assigned to it. When "
-          "you press the assigned keyboard shortcut, any draw calls using these shaders will be disabled, effectively hiding the elements in the 3D scene.");
-        ImGui::TextUnformatted("\nThe following default keyboard shortcuts are used when you click a group's 'Change Shaders' button. "
-                               "All of them (and a global 'toggle all groups' key) can be rebound in the 'Keybindings' section below:");
-        ImGui::TextUnformatted("* Numpad 1 and Numpad 2: previous/next pixel shader");
-        ImGui::TextUnformatted("* Ctrl + Numpad 1 and Ctrl + Numpad 2: previous/next marked pixel shader in the group");
-        ImGui::TextUnformatted("* Numpad 3: mark/unmark the current pixel shader as being part of the group");
-        ImGui::TextUnformatted("* Numpad 4 and Numpad 5: previous/next vertex shader");
-        ImGui::TextUnformatted("* Ctrl + Numpad 4 and Ctrl + Numpad 5: previous/next marked vertex shader in the group");
-        ImGui::TextUnformatted("* Numpad 6: mark/unmark the current vertex shader as being part of the group");
+          "like Shift, Alt and Control) or a gamepad controller combo to each group, including a handy name. Each group can have one or more vertex, pixel, or compute shaders assigned to it. When "
+          "you press the assigned keyboard shortcut or gamepad combo, any draw calls using these shaders will be disabled or toggled, effectively hiding the elements in the 3D scene.");
         ImGui::TextUnformatted(
-          "\nWhen you step through the shaders, the current shader is disabled in the 3D scene so you can see if that's the shader you were looking for.");
-        ImGui::TextUnformatted("When you're done, make sure you click 'Save all toggle groups' to preserve the groups you defined so next time you start your "
-                               "game they're loaded in and you can use them right away.");
+          "\nShader hunting can be controlled with the buttons in Group settings or with the shortcuts under Keybindings. Pixel and vertex hunting keep the "
+          "traditional numpad defaults; compute hunting is unassigned by default so it does not steal an existing shortcut. All hunting shortcuts can be changed "
+          "for laptops, compact keyboards or personal preference.");
+        ImGui::TextUnformatted(
+          "\nWhen you step through shaders, the currently selected shader is disabled in the scene so you can identify it. Double-click a hash, use Mark / unmark, "
+          "or use the configured shortcut to add or remove it from the group.");
+        ImGui::TextUnformatted(
+          "Configuration changes are tracked automatically. Use Save changes when the Unsaved changes indicator appears.");
         ImGui::PopTextWrapPos();
     }
 
@@ -1387,9 +1921,11 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
     if (ImGui::CollapsingHeader("Shader selection parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::AlignTextToFramePadding();
         ImGui::PushItemWidth(ImGui::GetWindowWidth() * 0.5f);
-        ImGui::SliderFloat("Overlay opacity", instance.OverlayOpacity(), 0.0f, 1.0f);
+        if (ImGui::SliderFloat("Overlay opacity", instance.OverlayOpacity(), 0.0f, 1.0f))
+            instance.MarkConfigDirty();
         ImGui::AlignTextToFramePadding();
-        ImGui::SliderInt("# of frames to collect", instance.StartValueFramecountCollectionPhase(), 10, 1000);
+        if (ImGui::SliderInt("# of frames to collect", instance.StartValueFramecountCollectionPhase(), 10, 1000))
+            instance.MarkConfigDirty();
         ImGui::SameLine();
         ShowHelpMarker("This is the number of frames the addon will collect active shaders. Set this to a high number if the shader you want to mark is only "
                        "used occasionally. Only shaders that are used in the frames collected can be marked.");
@@ -1447,14 +1983,27 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
         }
         ImGui::Separator();
 
-        for (uint32_t i = 0; i < IM_ARRAYSIZE(AddonImGui::KeybindNames); i++) {
+        bool duplicateBinding = false;
+        constexpr uint32_t totalKeybindCount = IM_ARRAYSIZE(AddonImGui::KeybindNames);
+        for (uint32_t i = 0; i < totalKeybindCount; i++) {
             uint32_t keys = instance.GetKeybinding(static_cast<AddonImGui::Keybind>(i));
             ImGui::PushItemWidth(ImGui::GetWindowWidth() * 0.35f);
-            if (key_input_box(AddonImGui::KeybindDisplayNames[i], &keys, runtime)) {
+            if (key_input_box(AddonImGui::KeybindDisplayNames[i], &keys, runtime))
                 instance.SetKeybinding(static_cast<AddonImGui::Keybind>(i), keys);
-            }
             ImGui::PopItemWidth();
+
+            if (keys != 0) {
+                for (uint32_t j = 0; j < i; ++j) {
+                    if (instance.GetKeybinding(static_cast<AddonImGui::Keybind>(j)) == keys) {
+                        duplicateBinding = true;
+                        break;
+                    }
+                }
+            }
         }
+
+        if (duplicateBinding)
+            ImGui::TextDisabled("Warning: two or more REST actions use the same shortcut.");
 
         ImGui::Spacing();
         ImGui::Text("Controller Shortcuts");
@@ -1473,65 +2022,89 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
     }
 
     if (ImGui::CollapsingHeader("List of Toggle Groups", ImGuiTreeNodeFlags_DefaultOpen)) {
-        if (ImGui::Button(" New ")) {
+        static std::string groupClipboardStatus;
+        if (ImGui::Button("New group"))
             instance.AddDefaultGroup();
+
+        ImGui::SameLine();
+        if (ImGui::Button("Import group")) {
+            const char* clipboard = ImGui::GetClipboardText();
+            if (clipboard != nullptr && instance.ImportToggleGroup(clipboard) != nullptr) {
+                RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
+                std::shared_lock<std::shared_mutex> techLock(runtimeData.technique_mutex);
+                instance.AssignPreferredGroupTechniques(runtimeData.allTechniques);
+                groupClipboardStatus = "Group imported from clipboard.";
+            } else
+                groupClipboardStatus = "Clipboard does not contain a valid REST group.";
         }
+
+        ImGui::SameLine();
+        if (instance.IsConfigDirty())
+            ImGui::TextDisabled("Unsaved changes");
+        else
+            ImGui::TextDisabled("Saved");
+
         ImGui::Separator();
 
         std::vector<ShaderToggler::ToggleGroup*> toRemove;
-        std::vector<ShaderToggler::ToggleGroup*> toDuplicate;
-        for (auto& [_, group] : instance.GetToggleGroups()) {
+        std::vector<int> toClone;
 
+        for (auto& [_, group] : instance.GetToggleGroups()) {
             ImGui::PushID(group.getId());
             ImGui::AlignTextToFramePadding();
-            if (ImGui::Button("X")) {
-                toRemove.push_back(&group);
-            }
-            ImGui::SameLine();
-            ImGui::Text(" %d ", group.getId());
 
-            ImGui::SameLine();
             bool groupActive = group.isActive();
             ImGui::Checkbox("Active", &groupActive);
             if (groupActive != group.isActive()) {
                 group.toggleActive();
-
-                if (!groupActive && instance.GetConstantHandler() != nullptr) {
+                if (!groupActive && instance.GetConstantHandler() != nullptr)
                     instance.GetConstantHandler()->RemoveGroup(&group, runtime->get_device());
-                }
             }
 
             ImGui::SameLine();
-            if (ImGui::Button("Edit")) {
+            if (ImGui::Button("Edit"))
                 group.setEditing(true);
-            }
 
             ImGui::SameLine();
-            if (ImGui::Button("Dup")) {
-                toDuplicate.push_back(&group);
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Duplicate this group (copies shaders, effects and settings into a new group; clears its toggle key).");
-            }
-
-            ImGui::SameLine();
-            if (instance.GetToggleGroupIdShaderEditing() >= 0) {
-                if (instance.GetToggleGroupIdShaderEditing() == group.getId()) {
-                    if (ImGui::Button(" Done ")) {
-                        s_selectedShaderTypeIndex = 0;
-                        instance.EndShaderEditing(true, group);
-                    }
+            if (instance.GetToggleGroupIdSettingsOpen() >= 0) {
+                if (instance.GetToggleGroupIdSettingsOpen() == group.getId()) {
+                    if (ImGui::Button("Close"))
+                        instance.CloseGroupSettings(true, group);
                 } else {
                     ImGui::BeginDisabled(true);
-                    ImGui::Button("      ");
+                    ImGui::Button("Settings");
                     ImGui::EndDisabled();
                 }
-            } else {
-                if (ImGui::Button("Settings")) {
-                    s_selectedShaderTypeIndex = 0;
-                    ImGui::SameLine();
-                    instance.StartShaderEditing(group);
+            } else if (ImGui::Button("Settings")) {
+                instance.OpenGroupSettings(group);
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Clone"))
+                toClone.push_back(group.getId());
+
+            ImGui::SameLine();
+            if (ImGui::Button("Copy group")) {
+                const std::string serialized = instance.ExportToggleGroup(group);
+                ImGui::SetClipboardText(serialized.c_str());
+                groupClipboardStatus = "Group copied to clipboard.";
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Delete"))
+                ImGui::OpenPopup("Delete group?");
+
+            if (ImGui::BeginPopupModal("Delete group?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::Text("Delete '%s'?", group.getName().c_str());
+                ImGui::TextDisabled("This takes effect immediately but is not written to disk until Save changes.");
+                if (ImGui::Button("Delete", ImVec2(120, 0))) {
+                    toRemove.push_back(&group);
+                    ImGui::CloseCurrentPopup();
                 }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(120, 0)))
+                    ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
             }
 
             ImGui::SameLine();
@@ -1539,22 +2112,58 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
             const std::string padStr = group.getGamepadShortcut() > 0 ? ShaderToggler::GamepadMonitor::buttonsToString(group.getGamepadShortcut()) : "";
 
             if (!keyStr.empty() && !padStr.empty()) {
-                ImGui::Text(" %s (%s | [Pad] %s)", group.getName().c_str(), keyStr.c_str(), padStr.c_str());
+                ImGui::Text("%s (%s | [Pad] %s)", group.getName().c_str(), keyStr.c_str(), padStr.c_str());
             } else if (!keyStr.empty()) {
-                ImGui::Text(" %s (%s)", group.getName().c_str(), keyStr.c_str());
+                ImGui::Text("%s (%s)", group.getName().c_str(), keyStr.c_str());
             } else if (!padStr.empty()) {
-                ImGui::Text(" %s ([Pad] %s)", group.getName().c_str(), padStr.c_str());
+                ImGui::Text("%s ([Pad] %s)", group.getName().c_str(), padStr.c_str());
             } else {
-                ImGui::Text(" %s", group.getName().c_str());
+                ImGui::Text("%s", group.getName().c_str());
+            }
+
+            const bool shaderEditingThisGroup = instance.GetToggleGroupIdShaderEditing().load() == group.getId();
+            const size_t psCount = shaderEditingThisGroup ? instance.GetPixelShaderManager()->getMarkedShaderCount() : group.getPixelShaderHashCount();
+            const size_t vsCount = shaderEditingThisGroup ? instance.GetVertexShaderManager()->getMarkedShaderCount() : group.getVertexShaderHashCount();
+            const size_t csCount = shaderEditingThisGroup ? instance.GetComputeShaderManager()->getMarkedShaderCount() : group.getComputeShaderHashCount();
+            const size_t fxCount = group.preferredTechniques().size();
+
+            ImGui::TextDisabled("PS: %zu | VS: %zu | CS: %zu | FX: %zu%s%s%s%s",
+                                psCount,
+                                vsCount,
+                                csCount,
+                                fxCount,
+                                group.getAutoRenderSRV() ? " | Auto Scene Colour" : "",
+                                group.getHideMarkedShaders() ? " | Hide shaders" : "",
+                                group.getSuppressDrawCall() ? " | Suppress draws" : "",
+                                shaderEditingThisGroup ? " | pending" : "");
+
+            if (group.getToggleKey() != 0) {
+                bool conflictShown = false;
+                for (const auto& [otherId, otherGroup] : instance.GetToggleGroups()) {
+                    if (otherId != group.getId() && otherGroup.getToggleKey() == group.getToggleKey()) {
+                        ImGui::TextDisabled("Warning: group shortcut conflicts with '%s'.", otherGroup.getName().c_str());
+                        conflictShown = true;
+                        break;
+                    }
+                }
+
+                if (!conflictShown) {
+                    constexpr uint32_t activeKeybindCount = static_cast<uint32_t>(AddonImGui::INVOCATION_DOWN);
+                    for (uint32_t i = 0; i < activeKeybindCount; ++i) {
+                        if (instance.GetKeybinding(static_cast<AddonImGui::Keybind>(i)) == group.getToggleKey()) {
+                            ImGui::TextDisabled("Warning: shortcut conflicts with REST action '%s'.", AddonImGui::KeybindDisplayNames[i]);
+                            break;
+                        }
+                    }
+                }
             }
 
             if (group.isEditing()) {
                 ImGui::Separator();
                 ImGui::Text("Edit group %d", group.getId());
 
-                // Name of group
-                char tmpBuffer[150];
-                const std::string& name = group.getName();
+                char tmpBuffer[150] = {};
+                const std::string name = group.getName();
                 strncpy_s(tmpBuffer, 150, name.c_str(), name.size());
                 ImGui::PushItemWidth(ImGui::GetWindowWidth() * 0.7f);
                 ImGui::AlignTextToFramePadding();
@@ -1564,19 +2173,16 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
                 group.setName(tmpBuffer);
                 ImGui::PopItemWidth();
 
-                // Key binding of group
                 ImGui::PushItemWidth(ImGui::GetWindowWidth() * 0.7f);
                 ImGui::AlignTextToFramePadding();
                 ImGui::Text("Key shortcut");
                 ImGui::SameLine(ImGui::GetWindowWidth() * 0.2f);
 
                 uint32_t keys = group.getToggleKey();
-                if (key_input_box(ShaderToggler::reshade_key_name(keys).c_str(), &keys, runtime)) {
+                if (key_input_box(ShaderToggler::reshade_key_name(keys).c_str(), &keys, runtime))
                     group.setToggleKey(keys);
-                }
                 ImGui::PopItemWidth();
 
-                // Gamepad shortcut of group
                 ImGui::PushItemWidth(ImGui::GetWindowWidth() * 0.5f);
                 ImGui::AlignTextToFramePadding();
                 ImGui::Text("Pad shortcut");
@@ -1592,23 +2198,21 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
                 }
                 ImGui::PopItemWidth();
 
-                // Suppress Draw Calls
                 bool suppress = group.getSuppressDrawCall();
                 ImGui::AlignTextToFramePadding();
                 ImGui::Text("Suppress draw calls");
                 ImGui::SameLine(ImGui::GetWindowWidth() * 0.2f);
-                if (ImGui::Checkbox("##SuppressDrawCall", &suppress)) {
+                if (ImGui::Checkbox("##SuppressDrawCallEdit", &suppress)) {
                     group.setSuppressDrawCall(suppress);
                 }
                 ImGui::SameLine();
-                ShowHelpMarker("When enabled and this group is active, draw calls using this group's shaders are suppressed directly on the GPU, hiding elements (like HUD/UI) without requiring ReShade effects.");
+                ShowHelpMarker("When enabled and this group is active, draw calls using this group's shaders are suppressed directly on the GPU.");
 
-                // Geometry / Refine Filters
                 ImGui::AlignTextToFramePadding();
                 ImGui::Text("Filter by index count");
                 ImGui::SameLine(ImGui::GetWindowWidth() * 0.2f);
                 bool matchIdx = group.getMatchIndexCount();
-                if (ImGui::Checkbox("##MatchIdx", &matchIdx)) {
+                if (ImGui::Checkbox("##MatchIdxEdit", &matchIdx)) {
                     group.setMatchIndexCount(matchIdx);
                 }
                 if (matchIdx) {
@@ -1616,12 +2220,12 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
                     int idxMin = static_cast<int>(group.getIndexCountMin());
                     int idxMax = static_cast<int>(group.getIndexCountMax());
                     ImGui::SetNextItemWidth(80.0f);
-                    if (ImGui::InputInt("Min##Idx", &idxMin, 0)) {
+                    if (ImGui::InputInt("Min##IdxEdit", &idxMin, 0)) {
                         group.setIndexCountMin(std::max(0, idxMin));
                     }
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(80.0f);
-                    if (ImGui::InputInt("Max##Idx", &idxMax, 0)) {
+                    if (ImGui::InputInt("Max##IdxEdit", &idxMax, 0)) {
                         group.setIndexCountMax(std::max(0, idxMax));
                     }
                     ImGui::SameLine();
@@ -1632,7 +2236,7 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
                 ImGui::Text("Filter by vertex count");
                 ImGui::SameLine(ImGui::GetWindowWidth() * 0.2f);
                 bool matchVtx = group.getMatchVertexCount();
-                if (ImGui::Checkbox("##MatchVtx", &matchVtx)) {
+                if (ImGui::Checkbox("##MatchVtxEdit", &matchVtx)) {
                     group.setMatchVertexCount(matchVtx);
                 }
                 if (matchVtx) {
@@ -1640,12 +2244,12 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
                     int vtxMin = static_cast<int>(group.getVertexCountMin());
                     int vtxMax = static_cast<int>(group.getVertexCountMax());
                     ImGui::SetNextItemWidth(80.0f);
-                    if (ImGui::InputInt("Min##Vtx", &vtxMin, 0)) {
+                    if (ImGui::InputInt("Min##VtxEdit", &vtxMin, 0)) {
                         group.setVertexCountMin(std::max(0, vtxMin));
                     }
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(80.0f);
-                    if (ImGui::InputInt("Max##Vtx", &vtxMax, 0)) {
+                    if (ImGui::InputInt("Max##VtxEdit", &vtxMax, 0)) {
                         group.setVertexCountMax(std::max(0, vtxMax));
                     }
                     ImGui::SameLine();
@@ -1653,7 +2257,7 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
                 }
 
                 if (group.hasGeometryFilter()) {
-                    if (ImGui::Button("Clear Geometry Filters")) {
+                    if (ImGui::Button("Clear Geometry Filters##Edit")) {
                         group.setMatchIndexCount(false);
                         group.setMatchVertexCount(false);
                         group.setMatchInstanceCount(false);
@@ -1664,48 +2268,45 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
                     }
                 }
 
-                if (ImGui::Button("OK")) {
+                if (ImGui::Button("OK"))
                     group.setEditing(false);
-                }
                 ImGui::Separator();
             }
 
             ImGui::PopID();
         }
-        if (toRemove.size() > 0) {
-            // switch off keybinding editing or shader editing, if in progress
+
+        for (const int sourceId : toClone)
+            instance.CloneToggleGroup(sourceId);
+
+        if (!toRemove.empty()) {
             instance.GetToggleGroupIdEffectEditing() = -1;
+            instance.GetToggleGroupIdSettingsOpen() = -1;
             instance.GetToggleGroupIdShaderEditing() = -1;
             instance.GetToggleGroupIdConstantEditing() = -1;
             instance.StopHuntingMode();
         }
-        for (const auto& group : toRemove) {
-            instance.SignalToggleGroupRemoved(runtime, group);
 
-            // Retire instead of erasing: the group object stays alive (and at the same address)
-            // until device teardown, so render threads that still hold its pointer can't crash.
+        for (const auto* group : toRemove) {
+            instance.SignalToggleGroupRemoved(runtime, const_cast<ShaderToggler::ToggleGroup*>(group));
+            // Retire instead of erasing: the group object stays alive at the same address
+            // until device teardown, preventing any crash on concurrent rendering threads.
             instance.RetireToggleGroup(group->getId());
         }
 
-        for (const auto& group : toDuplicate) {
-            ShaderToggler::ToggleGroup copy(*group);
-            copy.setId(ShaderToggler::ToggleGroup::getNewGroupId());
-            copy.setName(group->getName() + " (copy)");
-            copy.setToggleKey(0); // avoid two groups sharing the same hotkey
-            copy.setGamepadShortcut(0); // avoid two groups sharing the same controller shortcut
-            copy.setEditing(false);
-            instance.GetToggleGroups().emplace(copy.getId(), copy);
+        if (!toRemove.empty() || !toClone.empty()) {
+            instance.UpdateToggleGroupsForShaderHashes();
+            instance.MarkConfigDirty();
         }
 
-        if (toRemove.size() > 0 || toDuplicate.size() > 0) {
-            instance.UpdateToggleGroupsForShaderHashes();
-        }
+        if (!groupClipboardStatus.empty())
+            ImGui::TextDisabled("%s", groupClipboardStatus.c_str());
 
         ImGui::Separator();
+
         if (ImGui::Button("Reload from ini")) {
-            // Tear down all current groups (free their GPU resources) before
-            // reloading, since LoadShaderTogglerIniFile assumes a clean slate.
             instance.GetToggleGroupIdEffectEditing() = -1;
+            instance.GetToggleGroupIdSettingsOpen() = -1;
             instance.GetToggleGroupIdShaderEditing() = -1;
             instance.GetToggleGroupIdConstantEditing() = -1;
             instance.StopHuntingMode();
@@ -1719,10 +2320,16 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
         ImGui::SameLine();
         ShowHelpMarker("Discards unsaved changes and reloads all toggle groups and keybindings from ReshadeEffectShaderToggler.ini.");
 
-        if (instance.GetToggleGroups().size() > 0) {
-            if (ImGui::Button("Save all Toggle Groups")) {
-                instance.SaveShaderTogglerIniFile();
-            }
-        }
+        ImGui::SameLine();
+        const bool dirty = instance.IsConfigDirty();
+        if (!dirty)
+            ImGui::BeginDisabled();
+        if (ImGui::Button("Save changes"))
+            instance.SaveShaderTogglerIniFile();
+        if (!dirty)
+            ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        ImGui::TextDisabled(dirty ? "Changes have not been written to ReshadeEffectShaderToggler.ini." : "Configuration is up to date.");
     }
 }

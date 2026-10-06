@@ -8,7 +8,7 @@
 #include <unordered_map>
 
 #pragma warning(push)
-#pragma warning(disable : 4005)
+#pragma warning(disable : 4005 4244)
 #include <sigmatch.hpp>
 #pragma warning(pop)
 

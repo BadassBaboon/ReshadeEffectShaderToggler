@@ -18,6 +18,149 @@ RenderingPreviewManager::RenderingPreviewManager(AddonImGui::AddonUIData& data, 
 
 RenderingPreviewManager::~RenderingPreviewManager() {}
 
+void RenderingPreviewManager::RecordVulkanHuntedTarget(command_list* cmd_list, uint32_t stageIndex, uint32_t shaderHash) {
+    if (cmd_list == nullptr || cmd_list->get_device() == nullptr || cmd_list->get_device()->get_api() != device_api::vulkan)
+        return;
+
+    device* device = cmd_list->get_device();
+    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+
+    if (deviceData.current_runtime == nullptr || uiData.GetToggleGroupIdShaderEditing() < 0)
+        return;
+
+    HuntPreview& preview = deviceData.huntPreview;
+    if (preview.vulkan_capture_pending)
+        return;
+
+    auto groupIt = uiData.GetToggleGroups().find(uiData.GetToggleGroupIdShaderEditing());
+    if (groupIt == uiData.GetToggleGroups().end())
+        return;
+
+    ToggleGroup& group = groupIt->second;
+    if (group.isRetired())
+        return;
+
+    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    const uint64_t previewAction = MATCH_PREVIEW_PS << stageIndex;
+
+    const ResourceViewData activeTarget =
+      RenderingManager::GetCurrentResourceView(cmd_list, deviceData, &group, commandListData, stageIndex, previewAction);
+
+    if (activeTarget.resource == 0) {
+        preview.status = "Preview unavailable: no render target resolved for hunted draw";
+        preview.target = resource{ 0 };
+        preview.matched = false;
+        return;
+    }
+
+    const resource_desc desc = device->get_resource_desc(activeTarget.resource);
+
+    preview.target = activeTarget.resource;
+    preview.target_desc = desc;
+    preview.format = desc.texture.format;
+    preview.view_format = activeTarget.format != format::unknown ? activeTarget.format : desc.texture.format;
+    preview.width = desc.texture.width;
+    preview.height = desc.texture.height;
+    preview.hunted_shader_hash = shaderHash;
+    preview.hunted_stage = stageIndex;
+    preview.vulkan_command_list = cmd_list;
+    preview.vulkan_capture_pending = true;
+    deviceData.vulkanPreviewWorkPending.store(true, std::memory_order_release);
+    preview.matched = false;
+    preview.status = "Waiting for safe Vulkan preview boundary...";
+
+    if (!resourceManager.IsCompatibleWithPreviewFormat(device, activeTarget.resource, preview.view_format))
+        preview.recreate_preview = true;
+
+    // Track explicit resource barriers between the suppressed draw and the next
+    // render-pass boundary so the preview copy can restore the best-known usage.
+    cmd_list->get_private_data<state_tracking>().start_resource_barrier_tracking(activeTarget.resource, resource_usage::render_target);
+}
+
+void RenderingPreviewManager::CaptureDeferredVulkanPreview(command_list* cmd_list) {
+    if (cmd_list == nullptr || cmd_list->get_device() == nullptr || cmd_list->get_device()->get_api() != device_api::vulkan)
+        return;
+
+    device* device = cmd_list->get_device();
+    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    HuntPreview& preview = deviceData.huntPreview;
+
+    if (!preview.vulkan_capture_pending || preview.target == 0 || preview.vulkan_command_list != cmd_list)
+        return;
+
+    // Consume the pending capture exactly once. If preview resources still need to
+    // be recreated, CheckPreview does that at present and the next frame retries.
+    preview.vulkan_capture_pending = false;
+    deviceData.vulkanPreviewWorkPending.store(false, std::memory_order_release);
+
+    state_tracking& trackedState = cmd_list->get_private_data<state_tracking>();
+    resource_usage sourceUsage = trackedState.stop_resource_barrier_tracking(preview.target);
+    if (sourceUsage == resource_usage::undefined)
+        sourceUsage = resource_usage::render_target;
+
+    const resource_desc desc = device->get_resource_desc(preview.target);
+
+    if (desc.texture.samples != 1) {
+        preview.status = "Preview unavailable: multisampled target";
+        return;
+    }
+
+    if (static_cast<uint32_t>(desc.usage & resource_usage::copy_source) == 0) {
+        preview.status = "Preview unavailable: target lacks transfer-source usage";
+        return;
+    }
+
+    if (!device->check_format_support(desc.texture.format, resource_usage::copy_source)) {
+        preview.status = "Preview unavailable: format cannot be copied";
+        return;
+    }
+
+    if (!resourceManager.IsCompatibleWithPreviewFormat(device, preview.target, preview.view_format)) {
+        preview.recreate_preview = true;
+        preview.status = "Preparing Vulkan preview resource...";
+        return;
+    }
+
+    resource previewPong = resource{ 0 };
+    resource_view previewSrv = resource_view{ 0 };
+    resourceManager.SetPongPreviewHandles(device, &previewPong, nullptr, &previewSrv);
+
+    if (previewPong == 0 || previewSrv == 0) {
+        preview.recreate_preview = true;
+        preview.status = "Preparing Vulkan preview resource...";
+        return;
+    }
+
+    if (sourceUsage != resource_usage::copy_source)
+        cmd_list->barrier(preview.target, sourceUsage, resource_usage::copy_source);
+
+    cmd_list->barrier(previewPong, resource_usage::shader_resource, resource_usage::copy_dest);
+    cmd_list->copy_resource(preview.target, previewPong);
+    cmd_list->barrier(previewPong, resource_usage::copy_dest, resource_usage::shader_resource);
+
+    if (sourceUsage != resource_usage::copy_source)
+        cmd_list->barrier(preview.target, resource_usage::copy_source, sourceUsage);
+
+    preview.matched = true;
+    preview.status = "Captured at safe Vulkan render-pass boundary";
+}
+
+void RenderingPreviewManager::CancelDeferredVulkanPreview(device* device) {
+    if (device == nullptr || device->get_api() != device_api::vulkan)
+        return;
+
+    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    HuntPreview& preview = deviceData.huntPreview;
+
+    if (preview.vulkan_capture_pending && preview.target != 0 && preview.vulkan_command_list != nullptr) {
+        preview.vulkan_command_list->get_private_data<state_tracking>().stop_resource_barrier_tracking(preview.target);
+    }
+
+    preview.vulkan_capture_pending = false;
+    deviceData.vulkanPreviewWorkPending.store(false, std::memory_order_release);
+    preview.vulkan_command_list = nullptr;
+}
+
 void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t callLocation, uint64_t invocation) {
     if (cmd_list == nullptr || cmd_list->get_device() == nullptr) {
         return;

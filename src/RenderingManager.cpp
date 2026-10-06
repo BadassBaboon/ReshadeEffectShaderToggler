@@ -9,6 +9,70 @@ using namespace std;
 size_t RenderingManager::g_charBufferSize = CHAR_BUFFER_SIZE;
 char RenderingManager::g_charBuffer[CHAR_BUFFER_SIZE];
 
+std::string RenderingManager::FormatName(reshade::api::format value) {
+    using reshade::api::format;
+    switch (value) {
+        case format::unknown: return "UNKNOWN";
+        case format::r8_typeless: return "R8_TYPELESS";
+        case format::r8_uint: return "R8_UINT";
+        case format::r8_sint: return "R8_SINT";
+        case format::r8_unorm: return "R8_UNORM";
+        case format::r8_snorm: return "R8_SNORM";
+        case format::r8g8_typeless: return "R8G8_TYPELESS";
+        case format::r8g8_uint: return "R8G8_UINT";
+        case format::r8g8_sint: return "R8G8_SINT";
+        case format::r8g8_unorm: return "R8G8_UNORM";
+        case format::r8g8_snorm: return "R8G8_SNORM";
+        case format::r8g8b8a8_typeless: return "R8G8B8A8_TYPELESS";
+        case format::r8g8b8a8_uint: return "R8G8B8A8_UINT";
+        case format::r8g8b8a8_sint: return "R8G8B8A8_SINT";
+        case format::r8g8b8a8_unorm: return "R8G8B8A8_UNORM";
+        case format::r8g8b8a8_unorm_srgb: return "R8G8B8A8_UNORM_SRGB";
+        case format::r8g8b8a8_snorm: return "R8G8B8A8_SNORM";
+        case format::b8g8r8a8_typeless: return "B8G8R8A8_TYPELESS";
+        case format::b8g8r8a8_unorm: return "B8G8R8A8_UNORM";
+        case format::b8g8r8a8_unorm_srgb: return "B8G8R8A8_UNORM_SRGB";
+        case format::b8g8r8x8_typeless: return "B8G8R8X8_TYPELESS";
+        case format::b8g8r8x8_unorm: return "B8G8R8X8_UNORM";
+        case format::b8g8r8x8_unorm_srgb: return "B8G8R8X8_UNORM_SRGB";
+        case format::r10g10b10a2_typeless: return "R10G10B10A2_TYPELESS";
+        case format::r10g10b10a2_uint: return "R10G10B10A2_UINT";
+        case format::r10g10b10a2_unorm: return "R10G10B10A2_UNORM";
+        case format::r16_typeless: return "R16_TYPELESS";
+        case format::r16_uint: return "R16_UINT";
+        case format::r16_sint: return "R16_SINT";
+        case format::r16_unorm: return "R16_UNORM";
+        case format::r16_snorm: return "R16_SNORM";
+        case format::r16_float: return "R16_FLOAT";
+        case format::r16g16_typeless: return "R16G16_TYPELESS";
+        case format::r16g16_uint: return "R16G16_UINT";
+        case format::r16g16_sint: return "R16G16_SINT";
+        case format::r16g16_unorm: return "R16G16_UNORM";
+        case format::r16g16_snorm: return "R16G16_SNORM";
+        case format::r16g16_float: return "R16G16_FLOAT";
+        case format::r16g16b16a16_typeless: return "R16G16B16A16_TYPELESS";
+        case format::r16g16b16a16_uint: return "R16G16B16A16_UINT";
+        case format::r16g16b16a16_sint: return "R16G16B16A16_SINT";
+        case format::r16g16b16a16_unorm: return "R16G16B16A16_UNORM";
+        case format::r16g16b16a16_snorm: return "R16G16B16A16_SNORM";
+        case format::r16g16b16a16_float: return "R16G16B16A16_FLOAT";
+        case format::r32_typeless: return "R32_TYPELESS";
+        case format::r32_uint: return "R32_UINT";
+        case format::r32_sint: return "R32_SINT";
+        case format::r32_float: return "R32_FLOAT";
+        case format::r32g32_float: return "R32G32_FLOAT";
+        case format::r32g32b32_float: return "R32G32B32_FLOAT";
+        case format::r32g32b32a32_float: return "R32G32B32A32_FLOAT";
+        case format::r11g11b10_float: return "R11G11B10_FLOAT";
+        case format::r9g9b9e5: return "R9G9B9E5";
+        case format::d16_unorm: return "D16_UNORM";
+        case format::d24_unorm_s8_uint: return "D24_UNORM_S8_UINT";
+        case format::d32_float: return "D32_FLOAT";
+        case format::d32_float_s8_uint: return "D32_FLOAT_S8_UINT";
+        default: return std::format("FORMAT_{}", static_cast<uint32_t>(value));
+    }
+}
+
 void RenderingManager::EnumerateTechniques(effect_runtime* runtime, function<void(effect_runtime*, effect_technique, string&, string&)> func) {
     runtime->enumerate_techniques(nullptr, [func](effect_runtime* rt, effect_technique technique) {
         g_charBufferSize = CHAR_BUFFER_SIZE;
@@ -144,11 +208,105 @@ const ResourceViewData RenderingManager::GetCurrentResourceView(command_list* cm
     state_tracking& state = cmd_list->get_private_data<state_tracking>();
     const vector<resource_view>& rtvs = state.render_targets;
 
-    size_t index = 0;
-    size_t bindingRTindex = 0;
+    size_t index = group->getRenderTargetIndex();
+    size_t bindingRTindex = group->getBindingRenderTargetIndex();
     if (!rtvs.empty()) {
-        index = std::min<size_t>(group->getRenderTargetIndex(), rtvs.size() - 1);
-        bindingRTindex = std::min<size_t>(group->getBindingRenderTargetIndex(), rtvs.size() - 1);
+        index = std::min(index, rtvs.size() - 1);
+        bindingRTindex = std::min(bindingRTindex, rtvs.size() - 1);
+    } else {
+        index = 0;
+        bindingRTindex = 0;
+    }
+
+    const device_api deviceApi = device->get_api();
+    const bool autoSceneColour = group->isAutoSceneColourActive(deviceApi);
+
+    if (autoSceneColour) {
+        const uint32_t currentShaderHash =
+          descIndex == 0 ? commandListData.ps.activeShaderHash :
+          descIndex == 1 ? commandListData.vs.activeShaderHash :
+                           commandListData.cs.activeShaderHash;
+        group->setDebugCurrentShaderHash(currentShaderHash);
+        // Clear the previous target before resolving this draw so a no-target
+        // diagnostic cannot be grouped under stale dimensions/handles.
+        group->recordDebugAutoTarget(0, 0, 0, {});
+    }
+
+    // Automatic scene colour targets the primary live render target bound at the
+    // matched draw. This keeps the effect on the scene that subsequent game passes
+    // actually consume instead of relying on descriptor/SRV discovery.
+    if (action & (MATCH_EFFECT | MATCH_PREVIEW) && autoSceneColour) {
+        if (rtvs.empty()) {
+            if (deviceApi == device_api::vulkan)
+                group->setDebugAutoStatus("No colour target tracked at marked draw");
+        } else if (rtvs[0] == 0) {
+            if (deviceApi == device_api::vulkan)
+                group->setDebugAutoStatus("Primary colour view is null");
+        } else {
+            // Automatic mode always targets the primary live colour RTV. Do not inherit
+            // a stale manual render-target index from the group configuration.
+            resource rs = device->get_resource_from_view(rtvs[0]);
+            if (rs == 0) {
+                if (deviceApi == device_api::vulkan)
+                    group->setDebugAutoStatus("Primary colour view has no resource");
+            } else {
+                resource_desc desc = device->get_resource_desc(rs);
+                resource_view_desc v_desc = device->get_resource_view_desc(rtvs[0]);
+                const std::string formatName = FormatName(desc.texture.format);
+
+                group->recordDebugAutoTarget(rs.handle, desc.texture.width, desc.texture.height, formatName);
+
+                if (!IsColorBuffer(desc.texture.format)) {
+                    if (deviceApi == device_api::vulkan)
+                        group->setDebugAutoStatus(std::format("Rejected target: unsupported colour format {}", formatName));
+                } else {
+                    uint32_t screenshotWidth = 0, screenshotHeight = 0;
+                    deviceData.current_runtime->get_screenshot_width_and_height(&screenshotWidth, &screenshotHeight);
+
+                    if (!check_aspect_ratio(static_cast<float>(desc.texture.width),
+                                            static_cast<float>(desc.texture.height),
+                                            screenshotWidth,
+                                            screenshotHeight,
+                                            ShaderToggler::SWAPCHAIN_MATCH_MODE_ASPECT_RATIO)) {
+                        if (deviceApi == device_api::vulkan) {
+                            const float targetAspect = desc.texture.height != 0 ?
+                              static_cast<float>(desc.texture.width) / static_cast<float>(desc.texture.height) : 0.0f;
+                            const float outputAspect = screenshotHeight != 0 ?
+                              static_cast<float>(screenshotWidth) / static_cast<float>(screenshotHeight) : 0.0f;
+                            const float aspectDelta = std::fabs(outputAspect - targetAspect);
+
+                            if (aspectDelta > 0.1f) {
+                                group->setDebugAutoStatus(
+                                  std::format("Rejected target: {}x{} aspect mismatch vs {}x{} output",
+                                              desc.texture.width,
+                                              desc.texture.height,
+                                              screenshotWidth,
+                                              screenshotHeight));
+                            } else {
+                                const float widthScale = desc.texture.width != 0 ?
+                                  static_cast<float>(screenshotWidth) / static_cast<float>(desc.texture.width) : 0.0f;
+                                const float heightScale = desc.texture.height != 0 ?
+                                  static_cast<float>(screenshotHeight) / static_cast<float>(desc.texture.height) : 0.0f;
+                                group->setDebugAutoStatus(
+                                  std::format("Rejected target: {}x{} scale {:.2f}x/{:.2f}x outside automatic range",
+                                              desc.texture.width,
+                                              desc.texture.height,
+                                              widthScale,
+                                              heightScale));
+                            }
+                        }
+                    } else {
+                        active_data.resource = rs;
+                        active_data.format = v_desc.format;
+
+                        if (deviceApi == device_api::vulkan)
+                            group->setDebugAutoStatus("Matched target: waiting for safe render-pass continuation");
+
+                        return active_data;
+                    }
+                }
+            }
+        }
     }
 
     // Only return SRVs in case of bindings
@@ -192,7 +350,7 @@ const ResourceViewData RenderingManager::GetCurrentResourceView(command_list* cm
 
         active_data.resource = rs;
         active_data.format = v_desc.format;
-    } else if (action & (MATCH_EFFECT | MATCH_PREVIEW) && !group->getRenderToResourceViews() && rtvs.size() > 0 && rtvs[index] != 0) {
+    } else if (action & (MATCH_EFFECT | MATCH_PREVIEW) && !autoSceneColour && !group->getRenderToResourceViews() && rtvs.size() > 0 && rtvs[index] != 0) {
         resource rs = device->get_resource_from_view(rtvs[index]);
 
         if (rs == 0) {
@@ -210,7 +368,7 @@ const ResourceViewData RenderingManager::GetCurrentResourceView(command_list* cm
 
         active_data.resource = rs;
         active_data.format = v_desc.format;
-    } else if (action & (MATCH_EFFECT | MATCH_PREVIEW) && group->getRenderToResourceViews()) {
+    } else if (action & (MATCH_EFFECT | MATCH_PREVIEW) && !autoSceneColour && group->getRenderToResourceViews()) {
         uint32_t stageIndex = std::min(static_cast<uint32_t>(2), group->getRenderSRVShaderStage());
 
         int32_t slot_size = static_cast<int32_t>(state.get_root_table_size_at(stageIndex));

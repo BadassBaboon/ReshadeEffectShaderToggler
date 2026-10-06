@@ -57,7 +57,9 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                                             RuntimeDataContainer& runtimeData,
                                             const effect_queue& techniquesToRender,
                                             vector<EffectData*>& removalList,
-                                            const unordered_set<EffectData*>& toRenderNames) {
+                                            const unordered_set<EffectData*>& toRenderNames,
+                                            bool vulkanSafeBoundary,
+                                            const unordered_map<uint64_t, resource_usage>* allowedVulkanTargets) {
     bool rendered = false;
     CommandListDataContainer& cmdData = cmd_list->get_private_data<CommandListDataContainer>();
     effect_runtime* runtime = deviceData.current_runtime;
@@ -103,29 +105,6 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         resource_view view_srgb = {};
         resource_view group_view = {};
         resource_desc desc = cmd_list->get_device()->get_resource_desc(active_resource.resource);
-
-        // render_technique requires the target to match the effect/screenshot resolution. Marking a
-        // shader that draws into an off-size buffer (half-res bloom, shadow map, etc.) violates that
-        // and can corrupt the frame or hang on DX12. LOG-ONLY for now (still renders) so we can
-        // confirm real full-screen targets never trip this before we make it actually skip. Throttled
-        // to once per distinct (group,size).
-        {
-            uint32_t eff_w = 0, eff_h = 0;
-            runtime->get_screenshot_width_and_height(&eff_w, &eff_h);
-            if (eff_w != 0 && eff_h != 0 && (desc.texture.width != eff_w || desc.texture.height != eff_h)) {
-                static std::unordered_set<uint64_t> s_logged_size_mismatch;
-                const uint64_t key = (static_cast<uint64_t>(group->getId()) << 40) ^
-                                     (static_cast<uint64_t>(desc.texture.width) << 16) ^ desc.texture.height;
-                if (s_logged_size_mismatch.insert(key).second) {
-                    reshade::log::message(reshade::log::level::warning,
-                        ("[REST] RT size mismatch (effect would render into an off-size target): target=" +
-                         std::to_string(desc.texture.width) + "x" + std::to_string(desc.texture.height) +
-                         " effect=" + std::to_string(eff_w) + "x" + std::to_string(eff_h) +
-                         " - rendering anyway (log-only guard). If this is a target you marked, it's not full-screen.").c_str());
-                }
-            }
-        }
-
         GroupResource& groupResource = group->GetGroupResource(GroupResourceType::RESOURCE_ALPHA);
         const shared_ptr<GlobalResourceView>& view = resourceManager.GetResourceView(runtime->get_device(), active_resource);
         bool copyPreserveAlpha = false;
@@ -134,23 +113,191 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
             continue;
         }
 
-        if (group->getPreserveAlpha()) {
+        uint32_t runtimeWidth = 0, runtimeHeight = 0;
+        runtime->get_screenshot_width_and_height(&runtimeWidth, &runtimeHeight);
+
+        const device_api deviceApi = cmd_list->get_device()->get_api();
+        const bool autoSceneColour = group->isAutoSceneColourActive(deviceApi);
+        const bool preserveTargetAlpha = group->getPreserveAlpha() && !autoSceneColour;
+        const bool wantsNativeStaging =
+          autoSceneColour &&
+          runtimeWidth > 0 && runtimeHeight > 0 &&
+          (desc.texture.width != runtimeWidth || desc.texture.height != runtimeHeight);
+        const bool vulkanAutoSceneColour = autoSceneColour && deviceApi == device_api::vulkan;
+        const bool vulkanNativeStaging = vulkanAutoSceneColour && wantsNativeStaging;
+        resource_usage vulkanTargetUsage = resource_usage::render_target;
+
+        if (vulkanAutoSceneColour) {
+            // ReShade's Vulkan render_technique path always copies the supplied colour
+            // target into its effect-colour texture before the first pass, so the live
+            // image must already have transfer-source usage. Native staging additionally
+            // needs transfer-destination usage for the processed result to be blitted back.
+            const bool hasCopySource = static_cast<uint32_t>(desc.usage & resource_usage::copy_source) != 0;
+            const bool hasCopyDest = static_cast<uint32_t>(desc.usage & resource_usage::copy_dest) != 0;
+            if (!hasCopySource) {
+                group->setDebugAutoStatus("Unsupported target: missing transfer source");
+                continue;
+            }
+            if (wantsNativeStaging && !hasCopyDest) {
+                group->setDebugAutoStatus("Unsupported target: missing transfer destination");
+                continue;
+            }
+
+            if (!runtime->get_device()->check_format_support(desc.texture.format, resource_usage::copy_source)) {
+                group->setDebugAutoStatus("Unsupported format: transfer source");
+                continue;
+            }
+            if (wantsNativeStaging && !runtime->get_device()->check_format_support(desc.texture.format, resource_usage::copy_dest)) {
+                group->setDebugAutoStatus("Unsupported format: transfer destination");
+                continue;
+            }
+        }
+
+        // Vulkan draw callbacks execute inside the game's active render pass.
+        // ReShade effect rendering and transfer/blit commands would be invalid there,
+        // so defer Auto Scene Colour until a later begin_render_pass callback, which
+        // ReShade invokes before the Vulkan render pass actually begins.
+        if (vulkanAutoSceneColour) {
+            if (!vulkanSafeBoundary) {
+                // Move Vulkan Auto work out of the current command-list queue. A later
+                // continuation pass may be recorded on a different command buffer, so
+                // pending work is tracked at device scope. Preserve the first applicable
+                // group/target for a technique, matching REST's first-render-wins model.
+                group->setDebugAutoStatus("Waiting for safe Vulkan continuation or target transition");
+                if (!effectList.empty())
+                    deviceData.vulkanAutoWorkPending.store(true, std::memory_order_release);
+                for (EffectData* effect : effectList) {
+                    deviceData.vulkanAutoPendingEffects.try_emplace(effect, active_resource);
+                    removalList.push_back(effect);
+                }
+                continue;
+            }
+
+            if (allowedVulkanTargets != nullptr) {
+                const auto targetIt = allowedVulkanTargets->find(active_resource.resource.handle);
+                if (targetIt == allowedVulkanTargets->end())
+                    continue;
+                vulkanTargetUsage = targetIt->second;
+            }
+        }
+
+        bool useNativeStaging = false;
+        resource nativeStageRes = {};
+        resource_view nativeStageRTV = {};
+        resource_view nativeStageRTVSRGB = {};
+        resource_view nativeStageSRV = {};
+
+        if (wantsNativeStaging) {
+            if (vulkanNativeStaging) {
+                // Vulkan image blits require single-sample transfer-capable images.
+                // The live render target was opted into transfer usage at resource creation.
+                if (desc.texture.samples != 1) {
+                    group->setDebugAutoStatus("Unsupported target: multisampled");
+                    continue;
+                }
+                if (!runtime->get_device()->check_capability(device_caps::blit)) {
+                    group->setDebugAutoStatus("Unsupported device: image blit unavailable");
+                    continue;
+                }
+            }
+
+            GroupResource& staging = group->GetGroupResource(GroupResourceType::RESOURCE_NATIVE_STAGING);
+
+            resource_desc desired = desc;
+            desired.texture.width = runtimeWidth;
+            desired.texture.height = runtimeHeight;
+            desired.texture.depth_or_layers = 1;
+            desired.texture.levels = 1;
+            desired.texture.samples = 1;
+            desired.texture.format = format_to_typeless(active_resource.format);
+
+            bool stagingCompatible = false;
+            if (staging.res != 0) {
+                const resource_desc current = runtime->get_device()->get_resource_desc(staging.res);
+                stagingCompatible =
+                  current.texture.width == desired.texture.width &&
+                  current.texture.height == desired.texture.height &&
+                  format_to_typeless(current.texture.format) == format_to_typeless(desired.texture.format);
+            }
+
+            if (!stagingCompatible) {
+                staging.target_description = desired;
+                staging.view_format = active_resource.format;
+                staging.state = GroupResourceState::RESOURCE_INVALID;
+                continue;
+            }
+
+            groupResourceManager.SetGroupBufferHandles(group,
+                                                       GroupResourceType::RESOURCE_NATIVE_STAGING,
+                                                       &nativeStageRes,
+                                                       &nativeStageRTV,
+                                                       &nativeStageRTVSRGB,
+                                                       &nativeStageSRV);
+
+            if (nativeStageRes == 0 || nativeStageRTV == 0 || view->rtv == 0) {
+                continue;
+            }
+
+            if (vulkanNativeStaging) {
+                // Vulkan uses the generic ReShade blit API rather than REST's embedded
+                // DXBC fullscreen-copy pipeline. Keep the live image in copy-source state
+                // until the processed native-size result is blitted back.
+                if (vulkanTargetUsage != resource_usage::copy_source)
+                    cmd_list->barrier(active_resource.resource, vulkanTargetUsage, resource_usage::copy_source);
+                cmd_list->barrier(nativeStageRes, resource_usage::render_target, resource_usage::copy_dest);
+                cmd_list->copy_texture_region(active_resource.resource,
+                                              0,
+                                              nullptr,
+                                              nativeStageRes,
+                                              0,
+                                              nullptr,
+                                              filter_mode::min_mag_mip_point);
+                cmd_list->barrier(nativeStageRes, resource_usage::copy_dest, resource_usage::render_target);
+            } else {
+                if (nativeStageSRV == 0 || view->srv == 0) {
+                    continue;
+                }
+
+                // The selected resource is the live RTV bound for the matched draw.
+                // Temporarily transition it to shader-resource state so the fullscreen copy
+                // shader can sample it into the native-size staging surface.
+                cmd_list->barrier(active_resource.resource, resource_usage::render_target, resource_usage::shader_resource);
+
+                // Upscale the game's pre-DLSS scene into a native-size scratch surface.
+                // This keeps ReShade's effect-created intermediate textures at their normal
+                // runtime dimensions, avoiding mixed-resolution shared-resource permutations.
+                shaderManager.CopyResource(cmd_list, view->srv, nativeStageRTV, runtimeWidth, runtimeHeight);
+            }
+
+            view_non_srgb = nativeStageRTV;
+            view_srgb = nativeStageRTVSRGB != 0 ? nativeStageRTVSRGB : nativeStageRTV;
+            useNativeStaging = true;
+            staging.state = GroupResourceState::RESOURCE_VALID;
+        }
+
+        const bool transitionManualSRV =
+          !autoSceneColour && group->getRenderToResourceViews() &&
+          cmd_list->get_device()->get_api() == device_api::d3d12 &&
+          !useNativeStaging;
+
+        // Manual SRV rendering temporarily turns a shader-resource view into a
+        // render target, then restores its original state before the game resumes.
+        if (transitionManualSRV) {
+            cmd_list->barrier(active_resource.resource, resource_usage::shader_resource, resource_usage::render_target);
+        }
+
+        if (!useNativeStaging && preserveTargetAlpha) {
             resource group_res = {};
             groupResourceManager.SetGroupBufferHandles(group, GroupResourceType::RESOURCE_ALPHA, &group_res, &view_non_srgb, &view_srgb, &group_view);
-            
+
             const bool strict_copy = (runtime->get_device()->get_api() == reshade::api::device_api::d3d12 || runtime->get_device()->get_api() == reshade::api::device_api::vulkan);
             const reshade::api::format copy_typeless = format_to_typeless(desc.texture.format);
             const bool format_copyable = !strict_copy ||
                                          copy_typeless == reshade::api::format::r8g8b8a8_typeless ||
                                          copy_typeless == reshade::api::format::b8g8r8a8_typeless;
 
-            // group_res can be 0 if the group render target creation failed (e.g. HDR/FP16 targets
-            // whose create_resource fails). Copying into a null resource hangs the GPU, so only take
-            // the preserve-alpha path when the buffer is both format-compatible AND actually created.
             const bool compatible =
                 groupResourceManager.IsCompatibleWithGroupFormat(runtime->get_device(), GroupResourceType::RESOURCE_ALPHA, active_resource.resource, group);
-            // Also require a single-sampled 2D source: copy_resource of an MSAA / non-2D target
-            // hangs the device on DX12.
             const bool source_copyable = desc.texture.samples <= 1 && desc.type == resource_type::texture_2d && format_copyable;
             if (group_res != 0 && compatible && source_copyable) {
                 std::vector<reshade::api::resource_view> bound_rtvs;
@@ -169,22 +316,19 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                     // Rebind targets. ReShade's wrapper will automatically transition them back to RENDER_TARGET.
                     cmd_list->bind_render_targets_and_depth_stencil(static_cast<uint32_t>(bound_rtvs.size()), bound_rtvs.data(), bound_dsv);
                 }
-                
+
                 copyPreserveAlpha = true;
             } else {
                 view_non_srgb = view->rtv;
                 view_srgb = view->rtv_srgb;
 
-                // Only request a (re)created group buffer when the format is incompatible. If it's
-                // compatible but group_res is still 0, creation already failed for this target
-                // (e.g. HDR) - don't loop trying to recreate it every frame; just render directly.
                 if (!compatible) {
                     groupResource.state = GroupResourceState::RESOURCE_INVALID;
                     groupResource.target_description = desc;
                     groupResource.view_format = active_resource.format;
                 }
             }
-        } else {
+        } else if (!useNativeStaging) {
             view_non_srgb = view->rtv;
             view_srgb = view->rtv_srgb;
         }
@@ -192,6 +336,12 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         if (view_non_srgb == 0) {
             continue;
         }
+
+        const bool restoreVulkanDirectTarget =
+          vulkanAutoSceneColour && vulkanSafeBoundary && !useNativeStaging &&
+          vulkanTargetUsage != resource_usage::render_target;
+        if (restoreVulkanDirectTarget)
+            cmd_list->barrier(active_resource.resource, vulkanTargetUsage, resource_usage::render_target);
 
         if (group->getFlipBuffer() && runtimeData.specialEffects[REST_FLIP].technique != 0) {
             runtime->render_technique(runtimeData.specialEffects[REST_FLIP].technique, cmd_list, view_non_srgb, view_srgb);
@@ -201,51 +351,38 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
             runtime->render_technique(runtimeData.specialEffects[REST_TONEMAP_TO_SDR].technique, cmd_list, view_non_srgb, view_srgb);
         }
 
-        bool scaledOffsize = false;
-        resource_view original_view_non_srgb = view_non_srgb;
-        resource_view original_view_srgb = view_srgb;
-
-        uint32_t eff_w = 0, eff_h = 0;
-        runtime->get_screenshot_width_and_height(&eff_w, &eff_h);
-
-        // If target is off-size compared to the ReShade effect resolution (swapchain), upscale it to an intermediate buffer
-        if (copyPreserveAlpha && eff_w != 0 && eff_h != 0 && (desc.texture.width != eff_w || desc.texture.height != eff_h)) {
-            resource intermediate_res = {};
-            resource_view intermediate_rtv = {};
-            resource_view intermediate_rtv_srgb = {};
-            
-            groupResourceManager.SetGroupBufferHandles(group, GroupResourceType::RESOURCE_INTERMEDIATE_FULLRES, &intermediate_res, &intermediate_rtv, &intermediate_rtv_srgb, nullptr);
-
-            if (intermediate_res != 0 && runtimeData.specialEffects[REST_SCALE].technique != 0) {
-                // Upscale from the off-size alpha preservation buffer into the full-size intermediate buffer
-                runtime->update_texture_bindings("REST_SCALE_SOURCE", group_view, group_view);
-                runtime->render_technique(runtimeData.specialEffects[REST_SCALE].technique, cmd_list, intermediate_rtv, intermediate_rtv_srgb);
-                
-                // Point view_non_srgb to the full-size intermediate buffer so effects render there
-                view_non_srgb = intermediate_rtv;
-                view_srgb = intermediate_rtv_srgb;
-                scaledOffsize = true;
-            }
-        }
-
+        uint32_t renderedTechniqueCount = 0;
+        std::string renderedTechniqueOrder;
         for (const auto& effectTech : effectList) {
+            char techniqueName[256] = {};
+            size_t techniqueNameSize = sizeof(techniqueName);
+            runtime->get_technique_name(effectTech->technique, techniqueName, &techniqueNameSize);
+
+            if (!renderedTechniqueOrder.empty())
+                renderedTechniqueOrder += " -> ";
+            renderedTechniqueOrder += techniqueName;
+
             runtime->render_technique(effectTech->technique, cmd_list, view_non_srgb, view_srgb);
 
             effectTech->rendered = true;
+            ++renderedTechniqueCount;
+
             removalList.push_back(effectTech);
+
             rendered = true;
         }
 
-        if (scaledOffsize) {
-            // Downscale back from the intermediate buffer to the original off-size view
-            resource_view intermediate_srv = group->GetGroupResource(GroupResourceType::RESOURCE_INTERMEDIATE_FULLRES).srv;
-            
-            runtime->update_texture_bindings("REST_SCALE_SOURCE", intermediate_srv, intermediate_srv);
-            runtime->render_technique(runtimeData.specialEffects[REST_SCALE].technique, cmd_list, original_view_non_srgb, original_view_srgb);
-            
-            // Restore views
-            view_non_srgb = original_view_non_srgb;
-            view_srgb = original_view_srgb;
+        if (renderedTechniqueCount > 0) {
+            const uint32_t effectWidth = useNativeStaging ? runtimeWidth : desc.texture.width;
+            const uint32_t effectHeight = useNativeStaging ? runtimeHeight : desc.texture.height;
+            group->recordDebugEffectRender(renderedTechniqueCount,
+                                           active_resource.resource.handle,
+                                           renderedTechniqueOrder,
+                                           desc.texture.width,
+                                           desc.texture.height,
+                                           effectWidth,
+                                           effectHeight,
+                                           useNativeStaging);
         }
 
         if (group->getToneMap() && runtimeData.specialEffects[REST_TONEMAP_TO_HDR].technique != 0) {
@@ -258,13 +395,183 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
 
         if (copyPreserveAlpha) {
             resource_view target_view_non_srgb = view->rtv;
-            
+
             if (target_view_non_srgb != 0)
                 shaderManager.CopyResourceMaskAlpha(cmd_list, group_view, target_view_non_srgb, desc.texture.width, desc.texture.height);
+        }
+
+        if (useNativeStaging) {
+            // Downscale the completed native-size effect result back into the live
+            // scene target. Leave the game resource in render-target state so the
+            // matched draw can execute normally after REST returns.
+            if (vulkanNativeStaging) {
+                cmd_list->barrier(nativeStageRes, resource_usage::render_target, resource_usage::copy_source);
+                cmd_list->barrier(active_resource.resource, resource_usage::copy_source, resource_usage::copy_dest);
+                cmd_list->copy_texture_region(nativeStageRes,
+                                              0,
+                                              nullptr,
+                                              active_resource.resource,
+                                              0,
+                                              nullptr,
+                                              filter_mode::min_mag_mip_point);
+                cmd_list->barrier(nativeStageRes, resource_usage::copy_source, resource_usage::render_target);
+                if (vulkanTargetUsage != resource_usage::copy_dest)
+                    cmd_list->barrier(active_resource.resource, resource_usage::copy_dest, vulkanTargetUsage);
+            } else {
+                cmd_list->barrier(nativeStageRes, resource_usage::render_target, resource_usage::shader_resource);
+                cmd_list->barrier(active_resource.resource, resource_usage::shader_resource, resource_usage::render_target);
+
+                if (view->rtv != 0) {
+                    shaderManager.CopyResource(cmd_list, nativeStageSRV, view->rtv, desc.texture.width, desc.texture.height);
+                }
+
+                cmd_list->barrier(nativeStageRes, resource_usage::shader_resource, resource_usage::render_target);
+            }
+        } else if (transitionManualSRV) {
+            cmd_list->barrier(active_resource.resource, resource_usage::render_target, resource_usage::shader_resource);
+        } else if (restoreVulkanDirectTarget) {
+            cmd_list->barrier(active_resource.resource, resource_usage::render_target, vulkanTargetUsage);
         }
     }
 
     return rendered;
+}
+
+void RenderingEffectManager::RenderDeferredVulkanAutoEffects(command_list* cmd_list,
+                                                             uint32_t renderTargetCount,
+                                                             const render_pass_render_target_desc* renderTargets) {
+    if (cmd_list == nullptr || cmd_list->get_device() == nullptr ||
+        cmd_list->get_device()->get_api() != device_api::vulkan || renderTargetCount == 0 || renderTargets == nullptr) {
+        return;
+    }
+
+    unordered_map<uint64_t, resource_usage> safeTargets;
+    safeTargets.reserve(renderTargetCount);
+    for (uint32_t i = 0; i < renderTargetCount; ++i) {
+        if (renderTargets[i].view == 0 || renderTargets[i].load_op != render_pass_load_op::load)
+            continue;
+
+        // Only inject before a continuation pass that LOADs the existing target.
+        // CLEAR/DISCARD would immediately overwrite the injected result.
+        const resource target = cmd_list->get_device()->get_resource_from_view(renderTargets[i].view);
+        if (target != 0)
+            safeTargets.try_emplace(target.handle, resource_usage::render_target);
+    }
+
+    if (!safeTargets.empty())
+        _RenderDeferredVulkanAutoEffects(cmd_list, safeTargets, "same-target LOAD pass");
+}
+
+void RenderingEffectManager::RenderDeferredVulkanAutoEffectsAfterBarrier(command_list* cmd_list,
+                                                                        uint32_t barrierCount,
+                                                                        const resource* resources,
+                                                                        const resource_usage* oldStates,
+                                                                        const resource_usage* newStates) {
+    if (cmd_list == nullptr || cmd_list->get_device() == nullptr ||
+        cmd_list->get_device()->get_api() != device_api::vulkan ||
+        barrierCount == 0 || resources == nullptr || oldStates == nullptr || newStates == nullptr) {
+        return;
+    }
+
+    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    if (commandListData.vulkanAutoInjectionActive || commandListData.vulkanInsideRenderPass)
+        return;
+
+    unordered_map<uint64_t, resource_usage> safeTargets;
+    safeTargets.reserve(barrierCount);
+
+    for (uint32_t i = 0; i < barrierCount; ++i) {
+        if (resources[i] == 0 || oldStates[i] == resource_usage::undefined ||
+            newStates[i] == resource_usage::undefined) {
+            continue;
+        }
+
+        const uint32_t oldUsage = static_cast<uint32_t>(oldStates[i]);
+        const uint32_t newUsage = static_cast<uint32_t>(newStates[i]);
+        const uint32_t renderTargetUsage = static_cast<uint32_t>(resource_usage::render_target);
+
+        // Only use the fallback after the render pass has ended and the exact scene
+        // target is explicitly leaving render-target usage. This avoids firing on
+        // unrelated or in-pass barriers, which can cause intermittent double/early
+        // application and visible flicker.
+        if ((oldUsage & renderTargetUsage) == 0 || (newUsage & renderTargetUsage) != 0)
+            continue;
+
+        safeTargets.insert_or_assign(resources[i].handle, newStates[i]);
+    }
+
+    if (!safeTargets.empty())
+        _RenderDeferredVulkanAutoEffects(cmd_list, safeTargets, "post-pass RT transition");
+}
+
+void RenderingEffectManager::_RenderDeferredVulkanAutoEffects(
+  command_list* cmd_list,
+  const unordered_map<uint64_t, resource_usage>& safeTargets,
+  const char* boundaryName) {
+    if (cmd_list == nullptr || cmd_list->get_device() == nullptr || safeTargets.empty())
+        return;
+
+    DeviceDataContainer& deviceData = cmd_list->get_device()->get_private_data<DeviceDataContainer>();
+    if (deviceData.current_runtime == nullptr)
+        return;
+
+    unique_lock<shared_mutex> renderLock(deviceData.render_mutex);
+    if (deviceData.vulkanAutoPendingEffects.empty())
+        return;
+
+    RuntimeDataContainer& runtimeData = deviceData.current_runtime->get_private_data<RuntimeDataContainer>();
+    unordered_set<EffectData*> toRenderNames;
+
+    for (const auto& [effect, data] : deviceData.vulkanAutoPendingEffects) {
+        if (effect == nullptr || data.group == nullptr || data.resource == 0)
+            continue;
+        if (!data.group->isAutoSceneColourActive(device_api::vulkan))
+            continue;
+        if (!safeTargets.contains(data.resource.handle))
+            continue;
+        if (!effect->enabled || effect->rendered)
+            continue;
+
+        toRenderNames.insert(effect);
+    }
+
+    if (toRenderNames.empty())
+        return;
+
+    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    commandListData.vulkanAutoInjectionActive = true;
+
+    if (!deviceData.rendered_effects) {
+        deviceData.current_runtime->render_effects(cmd_list, resource_view{ 0 }, resource_view{ 0 });
+        deviceData.rendered_effects = true;
+    }
+
+    vector<EffectData*> removalList;
+
+    shared_lock<shared_mutex> techLock(runtimeData.technique_mutex);
+    _RenderEffects(cmd_list,
+                   deviceData,
+                   runtimeData,
+                   deviceData.vulkanAutoPendingEffects,
+                   removalList,
+                   toRenderNames,
+                   true,
+                   &safeTargets);
+    techLock.unlock();
+
+    for (auto* effect : removalList) {
+        const auto pendingIt = deviceData.vulkanAutoPendingEffects.find(effect);
+        if (pendingIt != deviceData.vulkanAutoPendingEffects.end() &&
+            pendingIt->second.group != nullptr && boundaryName != nullptr) {
+            pendingIt->second.group->setDebugLastVulkanBoundary(boundaryName);
+        }
+        deviceData.vulkanAutoPendingEffects.erase(effect);
+    }
+
+    if (deviceData.vulkanAutoPendingEffects.empty())
+        deviceData.vulkanAutoWorkPending.store(false, std::memory_order_release);
+
+    commandListData.vulkanAutoInjectionActive = false;
 }
 
 void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t callLocation, uint64_t invocation) {
@@ -312,7 +619,7 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
     vector<EffectData*> vsRemovalList;
     vector<EffectData*> csRemovalList;
 
-    if (psToRenderNames.size() == 0 && vsToRenderNames.size() == 0 && csToRenderNames.size() == 0) {
+    if (psToRenderNames.empty() && vsToRenderNames.empty() && csToRenderNames.empty()) {
         return;
     }
 
@@ -322,13 +629,12 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
     }
 
     shared_lock<shared_mutex> techLock(runtimeData.technique_mutex);
-    bool psRendered = (psToRenderNames.size() > 0) &&
-        _RenderEffects(cmd_list, deviceData, runtimeData, commandListData.ps.techniquesToRender, psRemovalList, psToRenderNames);
-    bool vsRendered = (vsToRenderNames.size() > 0) &&
-        _RenderEffects(cmd_list, deviceData, runtimeData, commandListData.vs.techniquesToRender, vsRemovalList, vsToRenderNames);
-    bool csRendered = (csToRenderNames.size() > 0) &&
-        _RenderEffects(cmd_list, deviceData, runtimeData, commandListData.cs.techniquesToRender, csRemovalList, csToRenderNames);
-    rendered = psRendered || vsRendered || csRendered;
+    rendered =
+      (psToRenderNames.size() > 0) &&
+        _RenderEffects(cmd_list, deviceData, runtimeData, commandListData.ps.techniquesToRender, psRemovalList, psToRenderNames) ||
+      (vsToRenderNames.size() > 0) &&
+        _RenderEffects(cmd_list, deviceData, runtimeData, commandListData.vs.techniquesToRender, vsRemovalList, vsToRenderNames) ||
+      (csToRenderNames.size() > 0) && _RenderEffects(cmd_list, deviceData, runtimeData, commandListData.cs.techniquesToRender, csRemovalList, csToRenderNames);
     techLock.unlock();
 
     for (auto& g : psRemovalList) {
@@ -341,10 +647,6 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
 
     for (auto& g : csRemovalList) {
         commandListData.cs.techniquesToRender.erase(g);
-    }
-
-    if (!commandListData.ps.techniquesToRender.empty() || !commandListData.vs.techniquesToRender.empty() || !commandListData.cs.techniquesToRender.empty()) {
-        commandListData.commandQueue |= (invocation << (callLocation * MATCH_DELIMITER));
     }
 
     if (rendered) {

@@ -55,6 +55,10 @@ struct __declspec(novtable) ShaderData final {
 
 struct __declspec(uuid("222F7169-3C09-40DB-9BC9-EC53842CE537")) CommandListDataContainer {
     uint64_t commandQueue = 0;
+    bool vulkanAutoInjectionActive = false;
+    bool vulkanInsideRenderPass = false;
+    bool vulkanRenderPassEndPending = false;
+    bool vulkanRenderPassSuspends = false;
     ShaderData ps{ 0 };
     ShaderData vs{ 1 };
     ShaderData cs{ 2 };
@@ -69,12 +73,16 @@ struct __declspec(uuid("222F7169-3C09-40DB-9BC9-EC53842CE537")) CommandListDataC
         vs.Reset();
         cs.Reset();
 
+        commandQueue = 0;
+        vulkanAutoInjectionActive = false;
+        vulkanInsideRenderPass = false;
+        vulkanRenderPassEndPending = false;
+        vulkanRenderPassSuspends = false;
+
         hasDrawGeometry = false;
         isIndexedDraw = false;
         currentDrawCount = 0;
         currentInstanceCount = 1;
-
-        commandQueue = 0;
     }
 };
 
@@ -102,6 +110,15 @@ struct __declspec(novtable) HuntPreview final {
     reshade::api::resource_desc target_desc;
     bool recreate_preview = false;
 
+    // Vulkan hunting cannot copy from the target inside the active render pass.
+    // Record the candidate at the suppressed draw and consume it at the next safe
+    // render-pass boundary on the same command list.
+    bool vulkan_capture_pending = false;
+    reshade::api::command_list* vulkan_command_list = nullptr;
+    uint32_t hunted_shader_hash = 0;
+    uint32_t hunted_stage = 0;
+    std::string status;
+
     void Reset() {
         matched = false;
         target = reshade::api::resource{ 0 };
@@ -109,8 +126,20 @@ struct __declspec(novtable) HuntPreview final {
         width = 0;
         height = 0;
         format = reshade::api::format::unknown;
+        view_format = reshade::api::format::unknown;
         recreate_preview = false;
+        vulkan_capture_pending = false;
+        vulkan_command_list = nullptr;
+        hunted_shader_hash = 0;
+        hunted_stage = 0;
+        status.clear();
     }
+};
+
+struct TechniqueUIEntry {
+    std::string name;
+    std::string upperName;
+    EffectData* effect = nullptr;
 };
 
 struct __declspec(novtable) SpecialEffect final {
@@ -160,6 +189,9 @@ struct __declspec(uuid("C63E95B1-4E2F-46D6-A276-E8B4612C069A")) DeviceDataContai
     std::unordered_set<const ShaderToggler::ToggleGroup*> bindingsUpdated;
     std::unordered_set<const ShaderToggler::ToggleGroup*> constantsUpdated;
     std::unordered_set<const ShaderToggler::ToggleGroup*> srvUpdated;
+    effect_queue vulkanAutoPendingEffects;
+    std::atomic_bool vulkanAutoWorkPending{ false };
+    std::atomic_bool vulkanPreviewWorkPending{ false };
     HuntPreview huntPreview;
     CustomShader customShader;
     ResouceManagerData resourceManagerData;
@@ -171,6 +203,7 @@ struct __declspec(uuid("838BAF1D-95C0-4A7E-A517-052642879986")) RuntimeDataConta
     std::unordered_map<std::string, EffectData> allTechniques;
     std::unordered_set<EffectData*> allEnabledTechniques;
     std::vector<EffectData*> allSortedTechniques;
+    std::vector<TechniqueUIEntry> techniqueUiCache;
 
     SpecialEffect specialEffects[5] = {
         SpecialEffect{ "REST_TONEMAP_TO_SDR", reshade::api::effect_technique{ 0 } },

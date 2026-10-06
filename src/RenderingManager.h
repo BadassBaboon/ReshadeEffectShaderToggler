@@ -88,6 +88,7 @@ class __declspec(novtable) RenderingManager final {
                                uint32_t layoutIndex,
                                uint64_t action);
     static bool IsColorBuffer(reshade::api::format value);
+    static std::string FormatName(reshade::api::format value);
 
   private:
     static void CycleDescriptors(ShaderToggler::ToggleGroup* group,

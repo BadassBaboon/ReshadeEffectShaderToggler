@@ -31,13 +31,13 @@
 /////////////////////////////////////////////////////////////////////////
 
 #include "ShaderManager.h"
+#include <algorithm>
 
 using namespace reshade::api;
 using namespace std;
 
 namespace ShaderToggler {
-ShaderManager::ShaderManager()
-  : _activeHuntedShaderHash(0) {}
+ShaderManager::ShaderManager() {}
 
 void ShaderManager::addHashHandlePair(uint32_t shaderHash, uint64_t pipelineHandle) {
     if (pipelineHandle > 0 && shaderHash > 0) {
@@ -48,13 +48,25 @@ void ShaderManager::addHashHandlePair(uint32_t shaderHash, uint64_t pipelineHand
 }
 
 void ShaderManager::removeHandle(uint64_t handle) {
-    unique_lock ulock(_hashHandlesMutex);
-    if (_handleToShaderHash.contains(handle)) {
-        const auto& it = _handleToShaderHash.find(handle);
-        const auto& shaderHash = it->second;
-        _handleToShaderHash.erase(handle);
-        _collectedActiveShaderHashes.erase(shaderHash);
+    uint32_t shaderHash = 0;
+    {
+        unique_lock ulock(_hashHandlesMutex);
+        const auto it = _handleToShaderHash.find(handle);
+        if (it == _handleToShaderHash.end())
+            return;
+
+        shaderHash = it->second;
+        _handleToShaderHash.erase(it);
         _shaderHashes.erase(shaderHash);
+    }
+
+    {
+        unique_lock lock(_collectedActiveHandlesMutex);
+        if (_collectedActiveShaderHashes.erase(shaderHash) > 0) {
+            const auto orderIt = std::find(_collectedActiveShaderOrder.begin(), _collectedActiveShaderOrder.end(), shaderHash);
+            if (orderIt != _collectedActiveShaderOrder.end())
+                _collectedActiveShaderOrder.erase(orderIt);
+        }
     }
 }
 
@@ -69,24 +81,27 @@ void ShaderManager::startHuntingMode(const unordered_set<uint32_t> currentMarked
     }
 
     // switch on hunting mode
-    _isInHuntingMode = true;
+    _isInHuntingMode.store(true, memory_order_release);
     _activeHuntedShaderIndex = -1;
-    _activeHuntedShaderHash = 0;
+    _activeHuntedShaderHash.store(0, memory_order_release);
+    clearObservedDrawGeometries();
     {
         unique_lock lock(_collectedActiveHandlesMutex);
         _collectedActiveShaderHashes.clear(); // clear it so we start with a clean slate
+        _collectedActiveShaderOrder.clear();
     }
 }
 
 void ShaderManager::resetActiveHuntedShader() {
     _activeHuntedShaderIndex = -1;
-    _activeHuntedShaderHash = 0;
+    _activeHuntedShaderHash.store(0, memory_order_release);
+    clearObservedDrawGeometries();
 }
 
 void ShaderManager::stopHuntingMode() {
-    _isInHuntingMode = false;
+    _isInHuntingMode.store(false, memory_order_release);
     _activeHuntedShaderIndex = -1;
-    _activeHuntedShaderHash = 0;
+    _activeHuntedShaderHash.store(0, memory_order_release);
     clearObservedDrawGeometries();
     {
         unique_lock lock(_markedShaderHashMutex);
@@ -96,127 +111,97 @@ void ShaderManager::stopHuntingMode() {
 
 void ShaderManager::setActiveHuntedShaderHandle() {
     clearObservedDrawGeometries();
-    if (_activeHuntedShaderIndex < 0 || _collectedActiveShaderHashes.size() == 0 ||
-        static_cast<size_t>(_activeHuntedShaderIndex) >= _collectedActiveShaderHashes.size()) {
-        _activeHuntedShaderHash = 0;
+    if (_activeHuntedShaderIndex < 0) {
+        _activeHuntedShaderHash.store(0, memory_order_release);
         return;
     }
 
-    // no lock needed, collecting phase is over
-    auto it = _collectedActiveShaderHashes.begin();
-    std::advance(it, _activeHuntedShaderIndex);
-    _activeHuntedShaderHash = *it;
+    _activeHuntedShaderHash.store(
+      getCollectedShaderHash(static_cast<uint32_t>(_activeHuntedShaderIndex)),
+      memory_order_release);
 }
 
 void ShaderManager::huntNextShader(bool ctrlPressed) {
-    if (!_isInHuntingMode) {
+    if (!_isInHuntingMode.load(memory_order_acquire))
         return;
-    }
-    if (_collectedActiveShaderHashes.size() == 0) {
-        return;
-    }
-    if (ctrlPressed) {
-        if (_markedShaderHashes.size() == 0 || (_markedShaderHashes.size() == 1 && _markedShaderHashes.contains(_activeHuntedShaderHash))) {
-            // optimization: if the current active shader is part of marked shader hashes and there is
-            // just 1 marked, then we can also stop. We then don't need to do anything so we can return
-            // also if there are no marked shaders, we won't find a next, so return now too.
-            return;
-        }
 
-        // we have marked shaders, find the next one in collected active shader hashes that's part of this set.
-        auto it = _collectedActiveShaderHashes.begin();
-        int index = _activeHuntedShaderIndex + 1;
-        std::advance(it, index);
-        bool foundHash = false;
-        uint32_t hash = 0;
-        while (index != _activeHuntedShaderIndex) {
-            if (it == _collectedActiveShaderHashes.end()) {
-                it = _collectedActiveShaderHashes.begin();
-                index = 0;
-            }
-            hash = *it;
+    const int32_t count = static_cast<int32_t>(getAmountShaderHashesCollected());
+    if (count <= 0)
+        return;
+
+    if (ctrlPressed) {
+        std::shared_lock lock(_markedShaderHashMutex);
+        if (_markedShaderHashes.empty())
+            return;
+
+        const int32_t start = _activeHuntedShaderIndex;
+        for (int32_t step = 1; step <= count; ++step) {
+            const int32_t index = (start + step + count) % count;
+            const uint32_t hash = getCollectedShaderHash(static_cast<uint32_t>(index));
             if (_markedShaderHashes.contains(hash)) {
-                // found one
-                foundHash = true;
-                break;
+                _activeHuntedShaderIndex = index;
+                _activeHuntedShaderHash.store(hash, memory_order_release);
+                clearObservedDrawGeometries();
+                return;
             }
-            ++it;
-            index++;
         }
-        if (foundHash) {
-            _activeHuntedShaderIndex = index;
-            _activeHuntedShaderHash = hash;
-        }
-        // always done
         return;
     }
-    if (static_cast<size_t>(_activeHuntedShaderIndex) < _collectedActiveShaderHashes.size() - 1) {
-        _activeHuntedShaderIndex++;
-    } else {
+
+    if (_activeHuntedShaderIndex < 0 || _activeHuntedShaderIndex >= count - 1)
         _activeHuntedShaderIndex = 0;
-    }
+    else
+        ++_activeHuntedShaderIndex;
+
     setActiveHuntedShaderHandle();
 }
 
 void ShaderManager::huntPreviousShader(bool ctrlPressed) {
-    if (!_isInHuntingMode) {
+    if (!_isInHuntingMode.load(memory_order_acquire))
         return;
-    }
-    if (_collectedActiveShaderHashes.size() == 0) {
+
+    const int32_t count = static_cast<int32_t>(getAmountShaderHashesCollected());
+    if (count <= 0)
         return;
-    }
+
     if (ctrlPressed) {
-        if (_markedShaderHashes.size() == 0 || (_markedShaderHashes.size() == 1 && _markedShaderHashes.contains(_activeHuntedShaderHash))) {
-            // optimization: if the current active shader is part of marked shader hashes and there is
-            // just 1 marked, then we can also stop. We then don't need to do anything so we can return
-            // also if there are no marked shaders, we won't find a next, so return now too.
+        std::shared_lock lock(_markedShaderHashMutex);
+        if (_markedShaderHashes.empty())
             return;
-        }
-        // we have marked shaders, find the next one in collected active shader hashes that's part of this set.
-        auto it = _collectedActiveShaderHashes.begin();
-        int32_t index = _activeHuntedShaderIndex - 1;
-        std::advance(it, index);
-        bool foundHash = false;
-        uint32_t hash = 0;
-        while (index != _activeHuntedShaderIndex) {
-            if (it == _collectedActiveShaderHashes.begin()) {
-                it = _collectedActiveShaderHashes.end();
-                --it;
-                index = static_cast<int32_t>(_collectedActiveShaderHashes.size()) - 1;
-            }
-            hash = *it;
+
+        const int32_t start = _activeHuntedShaderIndex < 0 ? 0 : _activeHuntedShaderIndex;
+        for (int32_t step = 1; step <= count; ++step) {
+            const int32_t index = (start - step + count * 2) % count;
+            const uint32_t hash = getCollectedShaderHash(static_cast<uint32_t>(index));
             if (_markedShaderHashes.contains(hash)) {
-                // found one
-                foundHash = true;
-                break;
+                _activeHuntedShaderIndex = index;
+                _activeHuntedShaderHash.store(hash, memory_order_release);
+                clearObservedDrawGeometries();
+                return;
             }
-            --it;
-            index--;
         }
-        if (foundHash) {
-            _activeHuntedShaderIndex = index;
-            _activeHuntedShaderHash = hash;
-        }
-        // always done
         return;
     }
-    if (_activeHuntedShaderIndex <= 0) {
-        _activeHuntedShaderIndex = static_cast<int32_t>(_collectedActiveShaderHashes.size()) - 1;
-    } else {
+
+    if (_activeHuntedShaderIndex <= 0)
+        _activeHuntedShaderIndex = count - 1;
+    else
         --_activeHuntedShaderIndex;
-    }
+
     setActiveHuntedShaderHandle();
 }
 
 void ShaderManager::setActivedHuntedShaderIndex(uint32_t index) {
-    if (!_isInHuntingMode) {
-        return;
-    }
-    if (_collectedActiveShaderHashes.size() <= 0) {
+    if (!_isInHuntingMode.load(memory_order_acquire)) {
         return;
     }
 
-    if (index >= _collectedActiveShaderHashes.size()) {
+    const size_t count = getAmountShaderHashesCollected();
+    if (count == 0) {
+        return;
+    }
+
+    if (index >= count) {
         _activeHuntedShaderIndex = 0;
     } else {
         _activeHuntedShaderIndex = index;
@@ -225,19 +210,33 @@ void ShaderManager::setActivedHuntedShaderIndex(uint32_t index) {
     setActiveHuntedShaderHandle();
 }
 
+bool ShaderManager::setActiveHuntedShaderHash(uint32_t hash) {
+    if (!_isInHuntingMode.load(memory_order_acquire) || hash == 0)
+        return false;
+
+    std::shared_lock lock(_collectedActiveHandlesMutex);
+    const auto it = std::find(_collectedActiveShaderOrder.begin(), _collectedActiveShaderOrder.end(), hash);
+    if (it == _collectedActiveShaderOrder.end())
+        return false;
+
+    _activeHuntedShaderIndex = static_cast<int32_t>(std::distance(_collectedActiveShaderOrder.begin(), it));
+    _activeHuntedShaderHash.store(hash, memory_order_release);
+    clearObservedDrawGeometries();
+    return true;
+}
+
 bool ShaderManager::isBlockedShader(uint32_t shaderHash) {
     if (shaderHash == 0) {
         return false;
     }
 
     bool toReturn = false;
-    if (_isInHuntingMode && _hideHuntedShader) {
-        // get the shader hash bound to this pipeline handle
-        toReturn |= (_activeHuntedShaderHash == shaderHash);
+    if (_isInHuntingMode.load(memory_order_acquire) && _hideHuntedShader) {
+        const uint32_t activeHash = _activeHuntedShaderHash.load(memory_order_acquire);
+        toReturn |= (activeHash == shaderHash);
     }
     if (_hideMarkedShaders) {
-        // check if the shader hash is part of the toggle group
-        std::shared_lock lock(_markedShaderHashMutex);
+        shared_lock lock(_markedShaderHashMutex);
         toReturn |= _markedShaderHashes.contains(shaderHash);
     }
 
@@ -249,33 +248,32 @@ void ShaderManager::addActivePipelineHandle(uint64_t handle) {
     const auto shaderHash = getShaderHash(handle);
     if (shaderHash > 0) {
         unique_lock lock(_collectedActiveHandlesMutex);
-        _collectedActiveShaderHashes.emplace(shaderHash);
+        const auto [_, inserted] = _collectedActiveShaderHashes.emplace(shaderHash);
+        if (inserted)
+            _collectedActiveShaderOrder.push_back(shaderHash);
     }
 }
 
 void ShaderManager::toggleMarkOnHuntedShader() {
-    if (_activeHuntedShaderHash <= 0) {
+    const uint32_t activeHash = _activeHuntedShaderHash.load(memory_order_acquire);
+    if (activeHash == 0)
         return;
-    }
+
     unique_lock lock(_markedShaderHashMutex);
-    if (_markedShaderHashes.contains(_activeHuntedShaderHash)) {
-        // remove it
-        _markedShaderHashes.erase(_activeHuntedShaderHash);
-    } else {
-        // add it
-        _markedShaderHashes.emplace(_activeHuntedShaderHash);
-    }
+    if (_markedShaderHashes.contains(activeHash))
+        _markedShaderHashes.erase(activeHash);
+    else
+        _markedShaderHashes.emplace(activeHash);
 }
 
 uint32_t ShaderManager::getShaderHash(uint64_t handle) {
-    if (!_handleToShaderHash.contains(handle)) {
-        return 0;
-    }
-    return _handleToShaderHash.at(handle);
+    shared_lock lock(_hashHandlesMutex);
+    const auto it = _handleToShaderHash.find(handle);
+    return it == _handleToShaderHash.end() ? 0 : it->second;
 }
 
 void ShaderManager::recordDrawGeometry(uint32_t shaderHash, bool isIndexed, uint32_t count, uint32_t instanceCount) {
-    if (!_isInHuntingMode || shaderHash == 0 || shaderHash != _activeHuntedShaderHash) {
+    if (!_isInHuntingMode.load(memory_order_acquire) || shaderHash == 0 || shaderHash != _activeHuntedShaderHash.load(memory_order_acquire)) {
         return;
     }
 

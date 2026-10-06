@@ -41,8 +41,17 @@
 #include <shared_mutex>
 #include <unordered_map>
 
-constexpr auto FRAMECOUNT_COLLECTION_PHASE_DEFAULT = 60;
+constexpr auto FRAMECOUNT_COLLECTION_PHASE_DEFAULT = 10;
 constexpr auto HASH_FILE_NAME = "ReshadeEffectShaderToggler.ini";
+constexpr int REST_CONFIG_VERSION = 1;
+
+struct HuntingUIState {
+    char shaderSearch[64] = {};
+    int filterMode = 0;
+    uint32_t selectedShaderType = 0;
+    int previewChannel = 0;
+    float shaderPaneWidth = 540.0f;
+};
 
 namespace AddonImGui {
 enum Keybind : uint32_t {
@@ -51,11 +60,22 @@ enum Keybind : uint32_t {
     PIXEL_SHADER_MARK,
     PIXEL_SHADER_MARKED_DOWN,
     PIXEL_SHADER_MARKED_UP,
+    PIXEL_SHADER_MARK_PREV,
+    PIXEL_SHADER_MARK_NEXT,
     VERTEX_SHADER_DOWN,
     VERTEX_SHADER_UP,
     VERTEX_SHADER_MARK,
     VERTEX_SHADER_MARKED_DOWN,
     VERTEX_SHADER_MARKED_UP,
+    VERTEX_SHADER_MARK_PREV,
+    VERTEX_SHADER_MARK_NEXT,
+    COMPUTE_SHADER_DOWN,
+    COMPUTE_SHADER_UP,
+    COMPUTE_SHADER_MARK,
+    COMPUTE_SHADER_MARKED_DOWN,
+    COMPUTE_SHADER_MARKED_UP,
+    COMPUTE_SHADER_MARK_PREV,
+    COMPUTE_SHADER_MARK_NEXT,
     INVOCATION_DOWN,
     INVOCATION_UP,
     DESCRIPTOR_DOWN,
@@ -64,18 +84,29 @@ enum Keybind : uint32_t {
 };
 
 // Stable ini keys (do not reorder/rename existing entries; append only).
-static const char* KeybindNames[] = { "PIXEL_SHADER_DOWN",        "PIXEL_SHADER_UP",        "PIXEL_SHADER_MARK",
-                                      "PIXEL_SHADER_MARKED_DOWN", "PIXEL_SHADER_MARKED_UP", "VERTEX_SHADER_DOWN",
-                                      "VERTEX_SHADER_UP",         "VERTEX_SHADER_MARK",     "VERTEX_SHADER_MARKED_DOWN",
-                                      "VERTEX_SHADER_MARKED_UP",  "INVOCATION_DOWN",        "INVOCATION_UP",
-                                      "DESCRIPTOR_DOWN",          "DESCRIPTOR_UP",          "TOGGLE_ALL_GROUPS" };
+static const char* KeybindNames[] = {
+    "PIXEL_SHADER_DOWN", "PIXEL_SHADER_UP", "PIXEL_SHADER_MARK", "PIXEL_SHADER_MARKED_DOWN", "PIXEL_SHADER_MARKED_UP",
+    "PIXEL_SHADER_MARK_PREV", "PIXEL_SHADER_MARK_NEXT",
+    "VERTEX_SHADER_DOWN", "VERTEX_SHADER_UP", "VERTEX_SHADER_MARK", "VERTEX_SHADER_MARKED_DOWN", "VERTEX_SHADER_MARKED_UP",
+    "VERTEX_SHADER_MARK_PREV", "VERTEX_SHADER_MARK_NEXT",
+    "COMPUTE_SHADER_DOWN", "COMPUTE_SHADER_UP", "COMPUTE_SHADER_MARK", "COMPUTE_SHADER_MARKED_DOWN", "COMPUTE_SHADER_MARKED_UP",
+    "COMPUTE_SHADER_MARK_PREV", "COMPUTE_SHADER_MARK_NEXT",
+    "INVOCATION_DOWN", "INVOCATION_UP", "DESCRIPTOR_DOWN", "DESCRIPTOR_UP",
+    "TOGGLE_ALL_GROUPS"
+};
 
 // Human-friendly labels shown in the Keybindings UI (parallel to KeybindNames).
-static const char* KeybindDisplayNames[] = { "Pixel shader: previous",        "Pixel shader: next",          "Pixel shader: mark/unmark",
-                                             "Marked pixel shader: previous", "Marked pixel shader: next",   "Vertex shader: previous",
-                                             "Vertex shader: next",           "Vertex shader: mark/unmark",  "Marked vertex shader: previous",
-                                             "Marked vertex shader: next",    "Invocation: previous",        "Invocation: next",
-                                             "Descriptor: previous",          "Descriptor: next",            "Toggle ALL groups on/off" };
+static const char* KeybindDisplayNames[] = {
+    "Pixel: previous shader", "Pixel: next shader", "Pixel: mark / unmark", "Pixel: previous marked", "Pixel: next marked",
+    "Pixel: mark + previous", "Pixel: mark + next",
+    "Vertex: previous shader", "Vertex: next shader", "Vertex: mark / unmark", "Vertex: previous marked", "Vertex: next marked",
+    "Vertex: mark + previous", "Vertex: mark + next",
+    "Compute: previous shader", "Compute: next shader", "Compute: mark / unmark", "Compute: previous marked", "Compute: next marked",
+    "Compute: mark + previous", "Compute: mark + next",
+    "Invocation: previous", "Invocation: next", "Descriptor: previous", "Descriptor: next",
+    "Toggle ALL groups on/off"
+};
+static_assert(ARRAYSIZE(KeybindNames) == ARRAYSIZE(KeybindDisplayNames));
 
 enum TabType : uint32_t {
     TAB_NONE = 0,
@@ -93,6 +124,7 @@ class AddonUIData {
     std::atomic_uint32_t* _activeCollectorFrameCounter;
     std::atomic_uint _invocationLocation = 0;
     std::atomic_uint _descriptorIndex = 0;
+    std::atomic_int _toggleGroupIdSettingsOpen = -1;
     std::atomic_int _toggleGroupIdShaderEditing = -1;
     std::atomic_int _toggleGroupIdEffectEditing = -1;
     std::atomic_int _toggleGroupIdConstantEditing = -1;
@@ -119,6 +151,8 @@ class AddonUIData {
     bool _preventRuntimeReload = false;
     std::filesystem::path _basePath;
     TabType _currentTab = TabType::TAB_NONE;
+    std::atomic_bool _configDirty{ false };
+    HuntingUIState _huntingUIState;
 
     std::vector<std::function<void(reshade::api::effect_runtime*, ShaderToggler::ToggleGroup*)>> _removalCallbacks;
 
@@ -148,6 +182,17 @@ class AddonUIData {
     std::vector<ShaderToggler::ToggleGroup*> GetToggleGroupsForComputeShaderHash(uint32_t hash);
     void UpdateToggleGroupsForShaderHashes();
     void AddDefaultGroup();
+    ShaderToggler::ToggleGroup* CloneToggleGroup(int sourceGroupId);
+    bool IsConfigDirty() const { return _configDirty.load(std::memory_order_acquire); }
+    void MarkConfigDirty() { _configDirty.store(true, std::memory_order_release); }
+    void MarkConfigClean() { _configDirty.store(false, std::memory_order_release); }
+    HuntingUIState& GetHuntingUIState() { return _huntingUIState; }
+    std::string ExportToggleGroup(const ShaderToggler::ToggleGroup& group) const;
+    ShaderToggler::ToggleGroup* ImportToggleGroup(const std::string& serialized);
+    const std::atomic_int& GetToggleGroupIdSettingsOpen() const { return _toggleGroupIdSettingsOpen; }
+    std::atomic_int& GetToggleGroupIdSettingsOpen() { return _toggleGroupIdSettingsOpen; }
+    void OpenGroupSettings(ShaderToggler::ToggleGroup& group);
+    void CloseGroupSettings(bool acceptCollectedShaderHashes, ShaderToggler::ToggleGroup& group);
     const std::atomic_int& GetToggleGroupIdShaderEditing() const;
     void EndShaderEditing(bool acceptCollectedShaderHashes, ShaderToggler::ToggleGroup& groupEditing);
     void StartShaderEditing(ShaderToggler::ToggleGroup& groupEditing);
@@ -179,20 +224,20 @@ class AddonUIData {
     const std::string& GetConstHookType() { return _constHookType; }
     const std::string& GetConstHookCopyType() { return _constHookCopyType; }
     const std::string& GetResourceShim() { return _resourceShim; }
-    void SetConstHookCopyType(std::string& copyType) { _constHookCopyType = copyType; }
-    void SetResourceShim(std::string& shim) { _resourceShim = shim; }
+    void SetConstHookCopyType(std::string& copyType) { if (_constHookCopyType != copyType) { _constHookCopyType = copyType; MarkConfigDirty(); } }
+    void SetResourceShim(std::string& shim) { if (_resourceShim != shim) { _resourceShim = shim; MarkConfigDirty(); } }
     void SetKeybinding(Keybind keybind, uint32_t keys);
     uint32_t GetGamepadToggleAll() const { return _gamepadToggleAll; }
-    void SetGamepadToggleAll(uint32_t val) { _gamepadToggleAll = val; }
+    void SetGamepadToggleAll(uint32_t val) { if (_gamepadToggleAll != val) { _gamepadToggleAll = val; MarkConfigDirty(); } }
     const std::unordered_map<std::string, std::tuple<Shim::Constants::constant_type, std::vector<reshade::api::effect_uniform_variable>>>* GetRESTVariables() {
         return _constantHandler->GetRESTVariables();
     };
     bool GetTrackDescriptors() const { return _trackDescriptors; }
-    void SetTrackDescriptors(bool track) { _trackDescriptors = track; }
+    void SetTrackDescriptors(bool track) { if (_trackDescriptors != track) { _trackDescriptors = track; MarkConfigDirty(); } }
     void AddToggleGroupRemovalCallback(std::function<void(reshade::api::effect_runtime*, ShaderToggler::ToggleGroup*)> callback);
     void SignalToggleGroupRemoved(reshade::api::effect_runtime*, ShaderToggler::ToggleGroup*);
     bool GetPreventRuntimeReload() const { return _preventRuntimeReload; }
-    void SetPreventRuntimeReload(bool reload) { _preventRuntimeReload = reload; }
+    void SetPreventRuntimeReload(bool reload) { if (_preventRuntimeReload != reload) { _preventRuntimeReload = reload; MarkConfigDirty(); } }
 
     void AssignPreferredGroupTechniques(std::unordered_map<std::string, EffectData>& allTechniques);
 };

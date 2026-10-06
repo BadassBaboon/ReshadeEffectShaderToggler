@@ -1,5 +1,7 @@
 #include "ConstantManager.h"
+#ifdef _WIN64
 #include "ConstantCopyFFXIV.h"
+#endif
 #include "ConstantCopyGPUReadback.h"
 #include "ConstantCopyMemcpyNested.h"
 #include "ConstantCopyMemcpySingular.h"
@@ -16,8 +18,13 @@ ConstantCopyType ConstantManager::ResolveConstantCopyType(const string& ctype) {
         return ConstantCopyType::Copy_MemcpySingular;
     else if (ctype == "memcpy_nested")
         return ConstantCopyType::Copy_MemcpyNested;
-    else if (ctype == "ffxiv")
+    else if (ctype == "ffxiv") {
+#ifdef _WIN64
         return ConstantCopyType::Copy_FFXIV;
+#else
+        return ConstantCopyType::Copy_None;
+#endif
+    }
     else if (ctype == "nier_replicant")
         return ConstantCopyType::Copy_NierReplicant;
     else if (ctype == "gpu_readback")
@@ -53,8 +60,12 @@ bool ConstantManager::Init(AddonImGui::AddonUIData& data,
             *constantCopy = &constantTypeMemcpyNested;
         } break;
         case ConstantCopyType::Copy_FFXIV: {
+#ifdef _WIN64
             static ConstantCopyFFXIV constantTypeFFXIV;
             *constantCopy = &constantTypeFFXIV;
+#else
+            *constantCopy = nullptr;
+#endif
         } break;
         case ConstantCopyType::Copy_NierReplicant: {
             static ConstantCopyNierReplicant constantTypeNierReplicant;

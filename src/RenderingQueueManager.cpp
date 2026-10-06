@@ -33,6 +33,22 @@ void RenderingQueueManager::_CheckCallForCommandList(ShaderData& sData,
             }
 
             if (group->isActive()) {
+                const device_api runtimeApi =
+                  deviceData.current_runtime != nullptr ? deviceData.current_runtime->get_device()->get_api() : device_api::d3d9;
+
+                if (runtimeApi == device_api::vulkan &&
+                    group->getId() == uiData.GetToggleGroupIdShaderEditing() &&
+                    (uiData.GetPixelShaderManager()->isInHuntingMode() ||
+                     uiData.GetVertexShaderManager()->isInHuntingMode() ||
+                     uiData.GetComputeShaderManager()->isInHuntingMode())) {
+                    // Vulkan hunting is visualised by suppressing the matching draw/dispatch.
+                    // Do not queue the legacy preview copy/effect work here: that path copies
+                    // the live target from inside the active Vulkan render pass and can cause
+                    // invalid command-buffer state/device loss.
+                    continue;
+                }
+
+                const bool autoSceneColour = group->isAutoSceneColourActive(runtimeApi);
                 if (group->getExtractConstants() && !deviceData.constantsUpdated.contains(group)) {
                     if (!sData.constantBuffersToUpdate.contains(group)) {
                         sData.constantBuffersToUpdate.emplace(group);
@@ -42,7 +58,7 @@ void RenderingQueueManager::_CheckCallForCommandList(ShaderData& sData,
 
                 if (group->getId() == uiData.GetToggleGroupIdShaderEditing() && !deviceData.huntPreview.matched) {
                     if (uiData.GetCurrentTabType() == AddonImGui::TAB_RENDER_TARGET) {
-                        if (group->getRenderToResourceViews()) {
+                        if (group->getRenderToResourceViews() || autoSceneColour) {
                             queue_mask |= match_preview << (CALL_DRAW * MATCH_DELIMITER);
                             deviceData.huntPreview.target_invocation_location = CALL_DRAW;
                         } else {
@@ -77,7 +93,7 @@ void RenderingQueueManager::_CheckCallForCommandList(ShaderData& sData,
 
                         if (!techData->rendered) {
                             if (!sData.techniquesToRender.contains(techData)) {
-                                if (group->getRenderToResourceViews()) {
+                                if (group->getRenderToResourceViews() || autoSceneColour) {
                                     sData.techniquesToRender.emplace(techData, ResourceRenderData{ group, CALL_DRAW, resource{ 0 }, format::unknown });
                                     queue_mask |= (match_effect << CALL_DRAW * MATCH_DELIMITER);
                                 } else {
@@ -93,8 +109,13 @@ void RenderingQueueManager::_CheckCallForCommandList(ShaderData& sData,
                     auto& preferred = group->GetPreferredTechniqueData();
 
                     for (auto& eff : preferred) {
+                        // Selected techniques still obey ReShade's global enabled state.
+                        if (!eff->enabled) {
+                            continue;
+                        }
+
                         if (!eff->rendered && !sData.techniquesToRender.contains(eff)) {
-                            if (group->getRenderToResourceViews()) {
+                            if (group->getRenderToResourceViews() || autoSceneColour) {
                                 sData.techniquesToRender.emplace(eff, ResourceRenderData{ group, CALL_DRAW, resource{ 0 }, format::unknown });
                                 queue_mask |= (match_effect << CALL_DRAW * MATCH_DELIMITER);
                             } else {

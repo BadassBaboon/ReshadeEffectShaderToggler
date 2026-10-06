@@ -16,7 +16,11 @@ enum ConstantCopyType {
     Copy_GPUReadback,
 };
 
+#ifdef _WIN64
 static const std::vector<std::string> ConstantCopyTypeNames = { "none", "gpu_readback", "ffxiv", "nier_replicant", "memcpy_singular", "memcpy_nested" };
+#else
+static const std::vector<std::string> ConstantCopyTypeNames = { "none", "gpu_readback", "nier_replicant", "memcpy_singular", "memcpy_nested" };
+#endif
 
 enum ConstantHandlerType {
     Handler_Default,

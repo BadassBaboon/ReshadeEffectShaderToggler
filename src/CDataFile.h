@@ -152,6 +152,8 @@ class CDataFile {
     // File handling methods
     /////////////////////////////////////////////////////////////////
     bool Load(t_Str szFileName);
+    bool LoadFromString(const t_Str& contents);
+    t_Str Serialize();
     bool Save();
 
     // Data handling methods

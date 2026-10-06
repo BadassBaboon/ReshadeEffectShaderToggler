@@ -43,6 +43,7 @@
 #include <fstream>
 #include <stdarg.h>
 #include <stdio.h>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -171,8 +172,82 @@ bool CDataFile::Load(t_Str szFileName) {
     }
 
     File.close();
+    // Parsing uses the normal setters internally, but a successful load itself is
+    // not a user modification and must not trigger an implicit save in the destructor.
+    m_bDirty = false;
 
     return true;
+}
+
+bool CDataFile::LoadFromString(const t_Str& contents) {
+    Clear();
+    m_Flags = (AUTOCREATE_SECTIONS | AUTOCREATE_KEYS);
+    m_Sections.push_back(t_Section{});
+
+    std::istringstream stream(contents);
+    t_Str szLine;
+    t_Str szComment;
+    t_Section* pSection = GetSection("");
+
+    while (std::getline(stream, szLine)) {
+        Trim(szLine);
+
+        if (szLine.find_first_of(CommentIndicators) == 0) {
+            szComment += "\n";
+            szComment += szLine;
+        } else if (szLine.find_first_of('[') == 0) {
+            const auto end = szLine.find_last_of(']');
+            if (end == t_Str::npos)
+                return false;
+
+            szLine.erase(0, 1);
+            szLine.erase(end - 1, 1);
+            CreateSection(szLine, szComment);
+            pSection = GetSection(szLine);
+            szComment.clear();
+        } else if (!szLine.empty()) {
+            t_Str szKey = GetNextWord(szLine);
+            t_Str szValue = szLine;
+            if (!szKey.empty() && !szValue.empty() && pSection != nullptr) {
+                SetValue(szKey, szValue, szComment, pSection->szName);
+                szComment.clear();
+            }
+        }
+    }
+
+    m_bDirty = false;
+    return true;
+}
+
+t_Str CDataFile::Serialize() {
+    std::ostringstream output;
+
+    for (auto& section : m_Sections) {
+        bool wroteComment = false;
+        if (!section.szComment.empty()) {
+            wroteComment = true;
+            output << "\n" << CommentStr(section.szComment);
+        }
+
+        if (!section.szName.empty())
+            output << (wroteComment ? "" : "\n") << "[" << section.szName << "]\n";
+
+        for (auto& key : section.Keys) {
+            if (key.szKey.empty() || key.szValue.empty())
+                continue;
+
+            if (!key.szComment.empty())
+                output << "\n" << CommentStr(key.szComment) << "\n";
+
+            output << key.szKey << EqualIndicators[0] << key.szValue << "\n";
+        }
+    }
+
+    // Serializing to memory is a completed save operation for callers such as
+    // REST group clipboard export. Avoid the destructor trying to save the same
+    // data to a non-existent filename afterwards.
+    m_bDirty = false;
+    return output.str();
 }
 
 // Save
