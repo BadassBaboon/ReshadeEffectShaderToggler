@@ -150,14 +150,10 @@ void RenderingQueueManager::CheckCallForCommandList(reshade::api::command_list* 
 
     shared_lock<shared_mutex> t_mutex(runtimeData.technique_mutex);
     shared_lock<shared_mutex> b_mutex(deviceData.binding_mutex);
-    shared_lock<shared_mutex> r_mutex(deviceData.render_mutex);
 
     _CheckCallForCommandList(commandListData.ps, commandListData, deviceData, runtimeData);
     _CheckCallForCommandList(commandListData.vs, commandListData, deviceData, runtimeData);
     _CheckCallForCommandList(commandListData.cs, commandListData, deviceData, runtimeData);
-
-    b_mutex.unlock();
-    r_mutex.unlock();
 }
 
 void RenderingQueueManager::_RescheduleGroups(ShaderData& sData, CommandListDataContainer& commandListData, DeviceDataContainer& deviceData) {
