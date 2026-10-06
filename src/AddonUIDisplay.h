@@ -398,16 +398,18 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
         ImGui::TableSetupColumn("##columnsetup", ImGuiTableColumnFlags_WidthFixed, tblWidth);
 
         ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
         ImGui::Text("Apply all enabled techniques");
         ImGui::TableNextColumn();
-        ImGui::Checkbox("##Catchalltechniques", &allowAll);
+        DrawToggleSwitch("##Catchalltechniques", &allowAll);
 
         ImGui::TableNextRow();
         if (allowAll) {
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Except for selected techniques");
             ImGui::TableNextColumn();
-            ImGui::Checkbox("##Exceptfor", &exceptions);
+            DrawToggleSwitch("##Exceptfor", &exceptions);
             ImGui::TableNextRow();
         }
 
@@ -528,11 +530,12 @@ static void DisplayPreview(AddonImGui::AddonUIData& instance,
         bool clearAlpha = group->getClearPreviewAlpha();
         const bool vulkan = runtime->get_device()->get_api() == reshade::api::device_api::vulkan;
 
+        ImGui::AlignTextToFramePadding();
         ImGui::Text("Clear alpha channel");
         ImGui::SameLine();
         if (vulkan)
             ImGui::BeginDisabled();
-        ImGui::Checkbox("##Clearalpha", &clearAlpha);
+        DrawToggleSwitch("##Clearalpha", &clearAlpha);
         if (vulkan) {
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered())
@@ -670,11 +673,12 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
             ImGui::TableSetupColumn("##RTcolumnsetup", ImGuiTableColumnFlags_WidthFixed, ImGui::GetWindowWidth() / 3);
 
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Auto scene colour");
             ImGui::TableNextColumn();
             if (!autoSceneColourSupported)
                 ImGui::BeginDisabled();
-            ImGui::Checkbox("##AutoSceneColour", &autoSceneColour);
+            DrawToggleSwitch("##AutoSceneColour", &autoSceneColour);
             if (!autoSceneColourSupported)
                 ImGui::EndDisabled();
             if (!autoSceneColourSupported) {
@@ -982,29 +986,33 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Retry RT assignment");
             ImGui::TableNextColumn();
-            ImGui::Checkbox("##RetryRTassignment", &retry);
+            DrawToggleSwitch("##RetryRTassignment", &retry);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Apply tone map clamping");
             ImGui::TableNextColumn();
-            ImGui::Checkbox("##tonemap", &tonemap);
+            DrawToggleSwitch("##tonemap", &tonemap);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Flip render target");
             ImGui::TableNextColumn();
-            ImGui::Checkbox("##flipbuffer", &flipbuffer);
+            DrawToggleSwitch("##flipbuffer", &flipbuffer);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Preserve target alpha channel");
             ImGui::TableNextColumn();
             if (autoSceneColourActive)
                 ImGui::BeginDisabled();
-            ImGui::Checkbox("##preserveAlpha", &preserveAlpha);
+            DrawToggleSwitch("##preserveAlpha", &preserveAlpha);
             if (autoSceneColourActive) {
                 ImGui::EndDisabled();
                 ImGui::SameLine();
@@ -1013,6 +1021,7 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Match swapchain");
             ImGui::TableNextColumn();
             if (autoSceneColourActive) {
@@ -1032,16 +1041,18 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Suppress draw calls");
             ImGui::TableNextColumn();
-            ImGui::Checkbox("##SuppressDrawCall", &suppressDraw);
+            DrawToggleSwitch("##SuppressDrawCall", &suppressDraw);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Filter by index count");
             ImGui::TableNextColumn();
             bool matchIdx = group->getMatchIndexCount();
-            if (ImGui::Checkbox("##MatchIdx", &matchIdx)) {
+            if (DrawToggleSwitch("##MatchIdx", &matchIdx)) {
                 group->setMatchIndexCount(matchIdx);
             }
             if (matchIdx) {
@@ -1061,10 +1072,11 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Filter by vertex count");
             ImGui::TableNextColumn();
             bool matchVtx = group->getMatchVertexCount();
-            if (ImGui::Checkbox("##MatchVtx", &matchVtx)) {
+            if (DrawToggleSwitch("##MatchVtx", &matchVtx)) {
                 group->setMatchVertexCount(matchVtx);
             }
             if (matchVtx) {
@@ -1148,9 +1160,10 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
             ImGui::TableSetupColumn("##BindingColumnSetup", ImGuiTableColumnFlags_WidthFixed, ImGui::GetWindowWidth() / 3);
 
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Texture binding enabled");
             ImGui::TableNextColumn();
-            ImGui::Checkbox("##Texturebindingenabled", &isBindingEnabled);
+            DrawToggleSwitch("##Texturebindingenabled", &isBindingEnabled);
 
             if (!isBindingEnabled) {
                 ImGui::BeginDisabled();
@@ -1162,6 +1175,7 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
             ImGui::TableNextRow();
 
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Texture semantic");
             ImGui::TableNextColumn();
             ImGui::InputText("##BindingName", tmpBuffer, 149);
@@ -1169,6 +1183,7 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
             ImGui::TableNextRow();
 
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Texture source");
             ImGui::TableNextColumn();
             if (ImGui::BeginCombo("##Bindingsource", typeSelectedItem, ImGuiComboFlags_None)) {
@@ -1187,25 +1202,28 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
             ImGui::TableNextRow();
 
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Create texture copy for binding");
             ImGui::TableNextColumn();
-            ImGui::Checkbox("##Copybinding", &copyBinding);
+            DrawToggleSwitch("##Copybinding", &copyBinding);
 
             ImGui::TableNextRow();
 
             ImGui::BeginDisabled(!copyBinding);
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Flip binding texture");
             ImGui::TableNextColumn();
-            ImGui::Checkbox("##flipbinding", &flipBinding);
+            DrawToggleSwitch("##flipbinding", &flipBinding);
             ImGui::EndDisabled();
 
             ImGui::TableNextRow();
 
             ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
             ImGui::Text("Clear binding on hash miss");
             ImGui::TableNextColumn();
-            ImGui::Checkbox("##Clearbinding", &clearBinding);
+            DrawToggleSwitch("##Clearbinding", &clearBinding);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
@@ -1443,85 +1461,8 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
 
     bool navigationChanged = false;
 
-    // Navigation row.
-    if (ImGui::BeginTable("ShaderHuntNavigation", 4, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoBordersInBody)) {
-        ImGui::TableNextColumn();
-        if (repeatButton("Prev")) {
-            shaderManager->huntPreviousShader(false);
-            navigationChanged = true;
-        }
-
-        ImGui::TableNextColumn();
-        if (repeatButton("Next")) {
-            shaderManager->huntNextShader(false);
-            navigationChanged = true;
-        }
-
-        ImGui::TableNextColumn();
-        if (repeatButton("Prev marked")) {
-            shaderManager->huntPreviousShader(true);
-            navigationChanged = true;
-        }
-
-        ImGui::TableNextColumn();
-        if (repeatButton("Next marked")) {
-            shaderManager->huntNextShader(true);
-            navigationChanged = true;
-        }
-
-        ImGui::EndTable();
-    }
-
     const size_t markedCount = shaderManager->getMarkedShaderCount();
     const uint32_t activeHuntedHash = shaderManager->getActiveHuntedShaderHash();
-
-    // Mark/action row.
-    if (ImGui::BeginTable("ShaderHuntActions", 5, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoBordersInBody)) {
-        ImGui::TableNextColumn();
-        if (ImGui::Button("Mark / unmark", ImVec2(-1.0f, 0))) {
-            shaderManager->toggleMarkOnHuntedShader();
-            navigationChanged = true;
-        }
-
-        ImGui::TableNextColumn();
-        if (repeatButton("Mark + Prev")) {
-            shaderManager->toggleMarkOnHuntedShader();
-            shaderManager->huntPreviousShader(false);
-            navigationChanged = true;
-        }
-
-        ImGui::TableNextColumn();
-        if (repeatButton("Mark + Next")) {
-            shaderManager->toggleMarkOnHuntedShader();
-            shaderManager->huntNextShader(false);
-            navigationChanged = true;
-        }
-
-        ImGui::TableNextColumn();
-        if (activeHuntedHash == 0)
-            ImGui::BeginDisabled();
-        if (ImGui::Button("Copy hash", ImVec2(-1.0f, 0))) {
-            const std::string hashText = std::format("0x{:08x}", activeHuntedHash);
-            ImGui::SetClipboardText(hashText.c_str());
-        }
-        if (activeHuntedHash == 0)
-            ImGui::EndDisabled();
-
-        ImGui::TableNextColumn();
-        if (markedCount == 0)
-            ImGui::BeginDisabled();
-        if (ImGui::Button("Clear marked", ImVec2(-1.0f, 0))) {
-            shaderManager->clearMarkedShaderHashes();
-            navigationChanged = true;
-        }
-        if (markedCount == 0)
-            ImGui::EndDisabled();
-
-        ImGui::EndTable();
-    }
-
-    if (navigationChanged)
-        instance.UpdateToggleGroupsForShaderHashes();
 
     const std::vector<uint32_t> hashes = shaderManager->getCollectedShaderHashesOrdered();
     const std::unordered_set<uint32_t> collectedSet(hashes.begin(), hashes.end());
@@ -1541,10 +1482,10 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
                         missingMarkedHashes.size());
     if (!missingMarkedHashes.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.25f, 0.25f, 1.0f));
-        ImGui::TextUnformatted("Red = marked but not observed during the latest collection pass.");
+        ImGui::TextUnformatted("Red = marked but not observed during latest pass.");
         ImGui::PopStyleColor();
     }
-    ImGui::TextWrapped("Pending shader marks are applied to the group when you click Done.");
+    ImGui::TextWrapped("Pending marks apply when you click Done.");
     ImGui::Separator();
 
     const uint32_t selectedHash = shaderManager->getActiveHuntedShaderHash();
@@ -1580,7 +1521,8 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
     for (const uint32_t hash : missingMarkedHashes)
         addIfVisible(hash, false);
 
-    const float listHeight = std::max(120.0f, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - 6.0f);
+    const float bottomControlsHeight = ImGui::GetFrameHeightWithSpacing() * 3.0f + ImGui::GetStyle().ItemSpacing.y * 2.0f + 6.0f;
+    const float listHeight = std::max(100.0f, ImGui::GetContentRegionAvail().y - bottomControlsHeight);
 
     if (ImGui::BeginTable("ShaderHashView",
                           1,
@@ -1612,7 +1554,7 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
                 }
             } else {
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Marked shader not observed during the latest collection pass.\nIt may be scene/state dependent rather than invalid.\nDouble-click to unmark it.");
+                    ImGui::SetTooltip("Marked shader not observed during the latest collection pass.\nDouble-click to unmark it.");
                 if (clicked && ImGui::IsMouseDoubleClicked(0) && shaderManager->removeMarkedShaderHash(hash))
                     instance.UpdateToggleGroupsForShaderHashes();
             }
@@ -1629,6 +1571,87 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
 
         ImGui::EndTable();
     }
+
+    ImGui::Spacing();
+
+    // Bottom Navigation Row 1: Previous / Next
+    if (ImGui::BeginTable("ShaderHuntNavPrimary", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoBordersInBody)) {
+        ImGui::TableNextColumn();
+        if (repeatButton("◄ Previous")) {
+            shaderManager->huntPreviousShader(false);
+            navigationChanged = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select previous collected shader");
+
+        ImGui::TableNextColumn();
+        if (repeatButton("Next ►")) {
+            shaderManager->huntNextShader(false);
+            navigationChanged = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select next collected shader");
+
+        ImGui::EndTable();
+    }
+
+    // Bottom Navigation Row 2: Marked Previous / Next
+    if (ImGui::BeginTable("ShaderHuntNavMarked", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoBordersInBody)) {
+        ImGui::TableNextColumn();
+        if (repeatButton("◄ Prev Marked")) {
+            shaderManager->huntPreviousShader(true);
+            navigationChanged = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select previous marked shader");
+
+        ImGui::TableNextColumn();
+        if (repeatButton("Next Marked ►")) {
+            shaderManager->huntNextShader(true);
+            navigationChanged = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select next marked shader");
+
+        ImGui::EndTable();
+    }
+
+    // Bottom Actions Row 3: Mark / Copy / Clear
+    if (ImGui::BeginTable("ShaderHuntActions", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
+        ImGui::TableSetupColumn("Mark", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("Copy", ImGuiTableColumnFlags_WidthFixed, 88.0f);
+        ImGui::TableSetupColumn("Clear", ImGuiTableColumnFlags_WidthFixed, 96.0f);
+
+        ImGui::TableNextColumn();
+        if (ImGui::Button("Mark / Unmark", ImVec2(-1.0f, 0))) {
+            shaderManager->toggleMarkOnHuntedShader();
+            navigationChanged = true;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle mark on active shader (or double-click hash in list)");
+
+        ImGui::TableNextColumn();
+        if (activeHuntedHash == 0)
+            ImGui::BeginDisabled();
+        if (ImGui::Button("Copy Hash", ImVec2(-1.0f, 0))) {
+            const std::string hashText = std::format("0x{:08x}", activeHuntedHash);
+            ImGui::SetClipboardText(hashText.c_str());
+        }
+        if (activeHuntedHash == 0)
+            ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy selected shader hash to clipboard");
+
+        ImGui::TableNextColumn();
+        if (markedCount == 0)
+            ImGui::BeginDisabled();
+        if (ImGui::Button("Clear Marked", ImVec2(-1.0f, 0))) {
+            shaderManager->clearMarkedShaderHashes();
+            navigationChanged = true;
+        }
+        if (markedCount == 0)
+            ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Clear all marked shaders in this stage");
+
+        ImGui::EndTable();
+    }
+
+    if (navigationChanged)
+        instance.UpdateToggleGroupsForShaderHashes();
 }
 
 static std::atomic<bool> s_imguiWantTextInput = false;
@@ -1753,25 +1776,34 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
 
                 bool hideMarkedShaders = group->getHideMarkedShaders();
-                if (ImGui::Checkbox("Hide marked shaders", &hideMarkedShaders))
+                if (DrawToggleSwitch("##HideMarkedShaders", &hideMarkedShaders))
                     group->setHideMarkedShaders(hideMarkedShaders);
+                ImGui::SameLine();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("Hide marked shaders");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Suppress graphics draws matching this group's marked pixel or vertex shaders while the group is active.\nUseful for HUD-free screenshots, shader identification and configuration testing.\nCompute dispatches are not suppressed.");
 
                 if (hideMarkedShaders)
                     ImGui::TextDisabled("Matching graphics draws are suppressed while this group is active.");
 
-                ImGui::SameLine();
+                ImGui::SameLine(0, 16.0f);
                 bool suppressDraw = group->getSuppressDrawCall();
-                if (ImGui::Checkbox("Suppress draw calls", &suppressDraw))
+                if (DrawToggleSwitch("##SuppressDrawCallTop", &suppressDraw))
                     group->setSuppressDrawCall(suppressDraw);
+                ImGui::SameLine();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("Suppress draw calls");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("When enabled and this group is active, draw calls using this group's shaders are suppressed directly on the GPU.");
 
                 if (ImGui::TreeNode("Geometry Refine Filters")) {
                     bool matchIdx = group->getMatchIndexCount();
-                    if (ImGui::Checkbox("Filter by index count", &matchIdx))
+                    if (DrawToggleSwitch("##MatchIdxOverlay", &matchIdx))
                         group->setMatchIndexCount(matchIdx);
+                    ImGui::SameLine();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Filter by index count");
                     if (matchIdx) {
                         ImGui::SameLine();
                         int idxMin = static_cast<int>(group->getIndexCountMin());
@@ -1786,8 +1818,11 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
                     }
 
                     bool matchVtx = group->getMatchVertexCount();
-                    if (ImGui::Checkbox("Filter by vertex count", &matchVtx))
+                    if (DrawToggleSwitch("##MatchVtxOverlay", &matchVtx))
                         group->setMatchVertexCount(matchVtx);
+                    ImGui::SameLine();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Filter by vertex count");
                     if (matchVtx) {
                         ImGui::SameLine();
                         int vtxMin = static_cast<int>(group->getVertexCountMin());
@@ -1802,8 +1837,11 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
                     }
 
                     bool matchInst = group->getMatchInstanceCount();
-                    if (ImGui::Checkbox("Filter by instance count", &matchInst))
+                    if (DrawToggleSwitch("##MatchInstOverlay", &matchInst))
                         group->setMatchInstanceCount(matchInst);
+                    ImGui::SameLine();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Filter by instance count");
                     if (matchInst) {
                         ImGui::SameLine();
                         int instMin = static_cast<int>(group->getInstanceCountMin());
@@ -2184,7 +2222,7 @@ static void DrawCategoryGroups(AddonImGui::AddonUIData& instance, reshade::api::
                 }
             }
 
-            // Action buttons on the right side of the card (auto-sized so they never clip)
+            // Action buttons on the right side of the card: only Settings and Edit!
             const bool isEditingShaders = instance.GetToggleGroupIdShaderEditing() == group.getId();
             const char* settingsLabel = isEditingShaders ? "Done" : "Settings";
             const char* editLabel = group.isEditing() ? "Close" : "Edit";
@@ -2193,10 +2231,7 @@ static void DrawCategoryGroups(AddonImGui::AddonUIData& instance, reshade::api::
             const float padX = ImGui::GetStyle().FramePadding.x * 2.0f;
             const float totalBtnsW = (ImGui::CalcTextSize(settingsLabel).x + padX) +
                                      (ImGui::CalcTextSize(editLabel).x + padX) +
-                                     (ImGui::CalcTextSize("Clone").x + padX) +
-                                     (ImGui::CalcTextSize("Copy").x + padX) +
-                                     (ImGui::CalcTextSize("Delete").x + padX) +
-                                     spacing * 4.0f + RFX_CARD_PAD;
+                                     spacing + RFX_CARD_PAD;
 
             const float avail = ImGui::GetContentRegionAvail().x;
             if (avail > totalBtnsW + 10.0f) {
@@ -2227,40 +2262,6 @@ static void DrawCategoryGroups(AddonImGui::AddonUIData& instance, reshade::api::
                 group.setEditing(!group.isEditing());
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle inline configuration panel (rename, keybind, pad combo, filters).");
-
-            ImGui::SameLine();
-            if (ImGui::Button("Clone")) {
-                toClone.push_back(group.getId());
-            }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Duplicate this group and its assigned shaders.");
-
-            ImGui::SameLine();
-            if (ImGui::Button("Copy")) {
-                const std::string serialized = instance.ExportToggleGroup(group);
-                ImGui::SetClipboardText(serialized.c_str());
-                groupClipboardStatus = "Group copied to clipboard.";
-            }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy serialized group to Windows clipboard.");
-
-            ImGui::SameLine();
-            if (ImGui::Button("Delete")) {
-                ImGui::OpenPopup("Delete group?");
-            }
-
-            if (ImGui::BeginPopupModal("Delete group?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::Text("Delete '%s'?", group.getName().c_str());
-                ImGui::TextDisabled("This takes effect immediately. Save changes to write to disk.");
-                ImGui::Spacing();
-                if (ImGui::Button("Delete")) {
-                    toRemove.push_back(&group);
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Cancel")) {
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndPopup();
-            }
 
             // Summary text row
             const bool shaderEditingThisGroup = instance.GetToggleGroupIdShaderEditing().load() == group.getId();
@@ -2466,8 +2467,57 @@ static void DrawCategoryGroups(AddonImGui::AddonUIData& instance, reshade::api::
                 }
 
                 ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+
                 if (ImGui::Button("Done Editing##OK")) {
                     group.setEditing(false);
+                }
+
+                // Action buttons on the right side of the edit panel
+                const float cloneW = ImGui::CalcTextSize("Clone").x + padX;
+                const float copyW = ImGui::CalcTextSize("Copy").x + padX;
+                const float deleteW = ImGui::CalcTextSize("Delete").x + padX;
+                const float rightActionsW = cloneW + copyW + deleteW + spacing * 2.0f + RFX_CARD_PAD;
+
+                const float availRight = ImGui::GetContentRegionAvail().x;
+                if (availRight > rightActionsW + 10.0f) {
+                    ImGui::SameLine(ImGui::GetCursorPosX() + availRight - rightActionsW);
+                } else {
+                    ImGui::Spacing();
+                }
+
+                if (ImGui::Button("Clone")) {
+                    toClone.push_back(group.getId());
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Duplicate this group and its assigned shaders.");
+
+                ImGui::SameLine();
+                if (ImGui::Button("Copy")) {
+                    const std::string serialized = instance.ExportToggleGroup(group);
+                    ImGui::SetClipboardText(serialized.c_str());
+                    groupClipboardStatus = "Group copied to clipboard.";
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Copy serialized group to Windows clipboard.");
+
+                ImGui::SameLine();
+                if (ImGui::Button("Delete")) {
+                    ImGui::OpenPopup("Delete group?");
+                }
+
+                if (ImGui::BeginPopupModal("Delete group?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                    ImGui::Text("Delete '%s'?", group.getName().c_str());
+                    ImGui::TextDisabled("This takes effect immediately. Save changes to write to disk.");
+                    ImGui::Spacing();
+                    if (ImGui::Button("Delete")) {
+                        toRemove.push_back(&group);
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Cancel")) {
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndPopup();
                 }
             }
 
@@ -2702,27 +2752,23 @@ static void DisplayRestTab(AddonImGui::AddonUIData& instance, reshade::api::effe
     ImDrawList* draw = ImGui::GetWindowDrawList();
     ImFont* font = ImGui::GetFont();
     const float base_font_size = ImGui::GetFontSize();
-    const float big_size = base_font_size * 1.30f;
+    const float big_size = base_font_size * 1.20f;
     const float small_size = base_font_size * 0.90f;
 
     const ImVec2 screen_pos = ImGui::GetCursorScreenPos();
     const float banner_top_y = screen_pos.y;
     const float cur_x = screen_pos.x;
 
-    // "Reshade Effect Shader Toggler" in larger font (1.30x)
+    // "Reshade Effect Shader Toggler"
     const char* title_text = "Reshade Effect Shader Toggler";
     const ImVec2 title_sz = font->CalcTextSizeA(big_size, FLT_MAX, -1.0f, title_text);
-    draw->AddText(font, big_size, ImVec2(cur_x, banner_top_y), rfx_u32(ImGuiCol_Text), title_text);
 
-    // Version string (e.g. "v1.4.2.0") — baseline-aligned with title
+    // Version string (e.g. "v1.4.2.0")
     const float baseline_offset = (big_size - small_size) * 0.78f;
-    const float ver_x = cur_x + title_sz.x + 8.0f;
-    const float ver_y = banner_top_y + baseline_offset;
     const std::string ver_text = "v" REST_VERSION_STRING;
     const ImVec2 ver_sz = font->CalcTextSizeA(small_size, FLT_MAX, -1.0f, ver_text.c_str());
-    draw->AddText(font, small_size, ImVec2(ver_x, ver_y), rfx_u32(ImGuiCol_TextDisabled), ver_text.c_str());
 
-    // Group count / active status badge on the right — baseline-aligned
+    // Group count / active status badge on the right
     size_t activeCount = 0;
     const auto& groups = instance.GetToggleGroups();
     for (const auto& [_, g] : groups) {
@@ -2731,16 +2777,30 @@ static void DisplayRestTab(AddonImGui::AddonUIData& instance, reshade::api::effe
     char status_str[64];
     snprintf(status_str, sizeof(status_str), "%zu Groups (%zu Active)", groups.size(), activeCount);
     const ImVec2 status_sz = font->CalcTextSizeA(small_size, FLT_MAX, -1.0f, status_str);
-    const float avail_w = ImGui::GetContentRegionAvail().x;
-    const float right_pad = 18.0f;
-    if (avail_w > (title_sz.x + 8.0f + ver_sz.x + status_sz.x + right_pad + 20.0f)) {
-        const float status_x = cur_x + avail_w - status_sz.x - right_pad;
-        const ImU32 status_col = activeCount > 0 ? ImGui::ColorConvertFloat4ToU32(rfx_ok()) : rfx_u32(ImGuiCol_TextDisabled);
-        draw->AddText(font, small_size, ImVec2(status_x, ver_y), status_col, status_str);
+    const ImU32 status_col = activeCount > 0 ? ImGui::ColorConvertFloat4ToU32(rfx_ok()) : rfx_u32(ImGuiCol_TextDisabled);
+
+    const float win_w = ImGui::GetWindowWidth();
+    const float pad_x = ImGui::GetStyle().WindowPadding.x;
+    const float right_x = ImGui::GetWindowPos().x + win_w - pad_x;
+    const float status_x = right_x - status_sz.x;
+
+    const bool fits_one_line = (cur_x + title_sz.x + 10.0f + ver_sz.x + 16.0f <= status_x);
+
+    if (fits_one_line) {
+        draw->AddText(font, big_size, ImVec2(cur_x, banner_top_y), rfx_u32(ImGuiCol_Text), title_text);
+        draw->AddText(font, small_size, ImVec2(cur_x + title_sz.x + 8.0f, banner_top_y + baseline_offset), rfx_u32(ImGuiCol_TextDisabled), ver_text.c_str());
+        draw->AddText(font, small_size, ImVec2(status_x, banner_top_y + baseline_offset), status_col, status_str);
+    } else {
+        draw->AddText(font, big_size, ImVec2(cur_x, banner_top_y), rfx_u32(ImGuiCol_Text), title_text);
+        const float line2_y = banner_top_y + title_sz.y + 3.0f;
+        draw->AddText(font, small_size, ImVec2(cur_x, line2_y), rfx_u32(ImGuiCol_TextDisabled), ver_text.c_str());
+        if (cur_x + ver_sz.x + 16.0f <= status_x) {
+            draw->AddText(font, small_size, ImVec2(status_x, line2_y), status_col, status_str);
+        }
     }
 
-    // Advance cursor Y cleanly past the banner
-    ImGui::Dummy(ImVec2(avail_w, std::max(title_sz.y, ver_y + ver_sz.y - banner_top_y) + 4.0f));
+    const float total_banner_h = fits_one_line ? (title_sz.y + 10.0f) : (title_sz.y + small_size + 14.0f);
+    ImGui::Dummy(ImVec2(0.0f, total_banner_h));
     ImGui::Spacing();
 
     // Two-pane layout: Left Sidebar + Right Content Area
@@ -2748,7 +2808,7 @@ static void DisplayRestTab(AddonImGui::AddonUIData& instance, reshade::api::effe
     for (int i = 0; i < CAT_COUNT; ++i) {
         max_label_w = std::max(max_label_w, ImGui::CalcTextSize(s_restCategoryNames[i]).x);
     }
-    const float sidebar_width = std::max(185.0f, max_label_w + 34.0f + 32.0f);
+    const float sidebar_width = std::max(175.0f, max_label_w + 34.0f + 24.0f);
 
     {
         ImVec4 sb = rfx_col(ImGuiCol_FrameBg);
@@ -2763,25 +2823,12 @@ static void DisplayRestTab(AddonImGui::AddonUIData& instance, reshade::api::effe
             }
         }
 
-        const float footer_h = ImGui::GetFrameHeightWithSpacing() * 3.0f + ImGui::GetStyle().ItemSpacing.y * 2.0f + 12.0f;
+        const float footer_h = ImGui::GetFrameHeightWithSpacing() * 2.0f + ImGui::GetStyle().ItemSpacing.y + 12.0f;
         if (ImGui::GetCursorPosY() < ImGui::GetWindowHeight() - footer_h) {
             ImGui::SetCursorPosY(ImGui::GetWindowHeight() - footer_h);
         }
         ImGui::Separator();
         ImGui::Spacing();
-
-        if (ImGui::Button("Discord", ImVec2(-1, 0))) {
-            ShellExecuteA(NULL, "open", REST_DISCORD_URL, NULL, NULL, SW_SHOWNORMAL);
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Join Baboon's Workshop on Discord");
-
-        const bool dirty = instance.IsConfigDirty();
-        if (!dirty) ImGui::BeginDisabled();
-        if (ImGui::Button("Save Changes", ImVec2(-1, 0))) {
-            instance.SaveShaderTogglerIniFile();
-        }
-        if (!dirty) ImGui::EndDisabled();
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save toggle groups and keybindings to ReshadeEffectShaderToggler.ini");
 
         if (ImGui::Button("Reload INI", ImVec2(-1, 0))) {
             instance.GetToggleGroupIdEffectEditing() = -1;
@@ -2797,6 +2844,14 @@ static void DisplayRestTab(AddonImGui::AddonUIData& instance, reshade::api::effe
             instance.UpdateToggleGroupsForShaderHashes();
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Discard unsaved changes and reload from ReshadeEffectShaderToggler.ini");
+
+        const bool dirty = instance.IsConfigDirty();
+        if (!dirty) ImGui::BeginDisabled();
+        if (ImGui::Button("Save Changes", ImVec2(-1, 0))) {
+            instance.SaveShaderTogglerIniFile();
+        }
+        if (!dirty) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Save toggle groups and keybindings to ReshadeEffectShaderToggler.ini");
     }
     ImGui::EndChild();
     ImGui::PopStyleColor(1);
@@ -2816,7 +2871,7 @@ static void DisplayRestTab(AddonImGui::AddonUIData& instance, reshade::api::effe
         ImVec2 cat_pos = ImGui::GetCursorScreenPos();
         cat_pos.x += 6.0f;
         const char* cat_title = cat_titles[s_currentRestCategory];
-        const float cat_size = base_font_size * 1.35f;
+        const float cat_size = base_font_size * 1.25f;
         const ImVec2 cat_sz = font->CalcTextSizeA(cat_size, FLT_MAX, -1.0f, cat_title);
         ImGui::GetWindowDrawList()->AddText(font, cat_size, cat_pos, rfx_u32(ImGuiCol_Text), cat_title);
         ImGui::Dummy(ImVec2(0.0f, cat_sz.y + 6.0f));
@@ -2873,4 +2928,10 @@ static void DisplayAddonsTab(AddonImGui::AddonUIData& instance, reshade::api::ef
         ImGui::BulletText("Configuration: %s", instance.IsConfigDirty() ? "Unsaved changes" : "Saved to disk");
         EndCard();
     }
+
+    ImGui::Spacing();
+    if (ImGui::Button("Discord", ImVec2(140.0f, 0))) {
+        ShellExecuteA(NULL, "open", REST_DISCORD_URL, NULL, NULL, SW_SHOWNORMAL);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Join Baboon's Workshop on Discord");
 }
