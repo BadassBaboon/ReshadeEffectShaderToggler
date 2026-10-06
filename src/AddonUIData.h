@@ -113,6 +113,7 @@ enum TabType : uint32_t {
     TAB_RENDER_TARGET,
     TAB_TEXTURE_BINDING,
     TAB_CONSTANT_BUFFER,
+    TAB_TECHNIQUE,
 };
 
 class AddonUIData {

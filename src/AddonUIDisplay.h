@@ -387,8 +387,7 @@ static void DisplayIsPartOfToggleGroup() {
 
 static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
                                       AddonImGui::AddonUIData& instance,
-                                      ShaderToggler::ToggleGroup* group,
-                                      float tblWidth = 0) {
+                                      ShaderToggler::ToggleGroup* group) {
     if (group == nullptr)
         return;
 
@@ -397,6 +396,8 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
 
     bool allowAll = group->getAllowAllTechniques();
     bool exceptions = group->getHasTechniqueExceptions();
+    const bool oldAllowAll = allowAll;
+    const bool oldExceptions = exceptions;
     bool selectionChanged = false;
 
     size_t availableCount = 0;
@@ -405,105 +406,197 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
         availableCount = runtimeData.techniqueUiCache.size();
     }
 
-    const float labelColWidth = std::max(200.0f, ImGui::CalcTextSize("Except for selected techniques   ").x);
-    if (ImGui::BeginTable("Technique selection##options", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
-        ImGui::TableSetupColumn("##columnsetup", ImGuiTableColumnFlags_WidthFixed, labelColWidth);
-        ImGui::TableSetupColumn("##columncontrols", ImGuiTableColumnFlags_WidthStretch);
+    if (BeginCard("##tech_mode_card", "TECHNIQUE ROUTING MODE")) {
+        const float labelColWidth = std::max(220.0f, ImGui::CalcTextSize("Except for selected techniques   ").x);
+        if (ImGui::BeginTable("TechniqueModeTable", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
+            ImGui::TableSetupColumn("##col_label", ImGuiTableColumnFlags_WidthFixed, labelColWidth);
+            ImGui::TableSetupColumn("##col_ctrl", ImGuiTableColumnFlags_WidthStretch);
 
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Apply all enabled techniques");
-        ImGui::TableNextColumn();
-        DrawTableToggleSwitch("##Catchalltechniques", &allowAll);
-
-        ImGui::TableNextRow();
-        if (allowAll) {
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("Except for selected techniques");
+            ImGui::TextUnformatted("Apply all enabled techniques");
             ImGui::TableNextColumn();
-            DrawTableToggleSwitch("##Exceptfor", &exceptions);
-            ImGui::TableNextRow();
-        }
+            if (DrawTableToggleSwitch("##ApplyAllTechniques", &allowAll)) {
+                selectionChanged = true;
+            }
 
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Mode");
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        if (!allowAll)
-            ImGui::TextUnformatted("Only ticked enabled techniques are applied");
-        else if (exceptions)
-            ImGui::TextUnformatted("Ticked techniques are EXCLUDED");
-        else
-            ImGui::TextUnformatted("All globally enabled techniques are applied");
-
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Search");
-        ImGui::TableNextColumn();
-        ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputText("##techniqueSearch", searchBuf, IM_ARRAYSIZE(searchBuf));
-
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        if (ImGui::Button("Untick all") && !group->preferredTechniques().empty()) {
-            const std::unordered_set<std::string> empty;
-            group->setPreferredTechniques(empty);
-            selectionChanged = true;
-        }
-        ImGui::TableNextColumn();
-        ImGui::AlignTextToFramePadding();
-        ImGui::Text("%zu selected / %zu available", group->preferredTechniques().size(), availableCount);
-        ImGui::EndTable();
-    }
-
-    ImGui::Separator();
-
-    if (allowAll && !exceptions)
-        ImGui::BeginDisabled();
-
-    std::string searchUpper(searchBuf);
-    std::transform(searchUpper.begin(), searchUpper.end(), searchUpper.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
-
-    {
-        std::shared_lock<std::shared_mutex> techLock(runtimeData.technique_mutex);
-        if (ImGui::BeginTable("Technique selection##table", 3,
-                              ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoBordersInBody)) {
-            ImGui::TableSetupColumn("##columnsetupSelection", ImGuiTableColumnFlags_WidthFixed, tblWidth);
-
-            for (const auto& entry : runtimeData.techniqueUiCache) {
-                if (!searchUpper.empty() && entry.upperName.find(searchUpper) == std::string::npos)
-                    continue;
-
-                bool enabled = group->preferredTechniques().contains(entry.name);
+            if (allowAll) {
+                ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                if (ImGui::Checkbox(entry.name.c_str(), &enabled)) {
-                    auto updated = group->preferredTechniques();
-                    if (enabled)
-                        updated.insert(entry.name);
-                    else
-                        updated.erase(entry.name);
-                    group->setPreferredTechniques(updated);
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("Except for selected techniques");
+                ImGui::TableNextColumn();
+                if (DrawTableToggleSwitch("##TechExceptions", &exceptions)) {
                     selectionChanged = true;
                 }
-
-                if (entry.effect != nullptr && !entry.effect->enabled) {
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("(disabled in ReShade)");
-                }
             }
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Current Routing Mode");
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            if (!allowAll) {
+                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), "INCLUSION LIST");
+                ImGui::SameLine();
+                ImGui::TextDisabled("— Only checked techniques trigger for this group");
+            } else if (exceptions) {
+                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f), "EXCLUSION LIST");
+                ImGui::SameLine();
+                ImGui::TextDisabled("— All active techniques trigger EXCEPT checked ones");
+            } else {
+                ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "ALL ACTIVE TECHNIQUES (Passive)");
+                ImGui::SameLine();
+                ImGui::TextDisabled("— All globally enabled ReShade techniques apply");
+            }
+
             ImGui::EndTable();
         }
+        EndCard();
     }
 
-    if (allowAll && !exceptions)
-        ImGui::EndDisabled();
+    ImGui::Spacing();
 
-    group->setHasTechniqueExceptions(exceptions);
-    group->setAllowAllTechniques(allowAll);
+    if (BeginCard("##tech_list_card", "AVAILABLE TECHNIQUES")) {
+        // Search bar
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputTextWithHint("##techniqueSearch", "Search techniques by name...", searchBuf, IM_ARRAYSIZE(searchBuf));
+
+        ImGui::Spacing();
+
+        const bool canEditCheckboxes = !allowAll || exceptions;
+        if (!canEditCheckboxes) {
+            ImGui::BeginDisabled();
+        }
+
+        const float btnW = 95.0f;
+        if (ImGui::Button("Select All", ImVec2(btnW, 0))) {
+            std::shared_lock<std::shared_mutex> techLock(runtimeData.technique_mutex);
+            auto updated = group->preferredTechniques();
+            std::string searchUpper(searchBuf);
+            std::transform(searchUpper.begin(), searchUpper.end(), searchUpper.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+            for (const auto& entry : runtimeData.techniqueUiCache) {
+                if (searchUpper.empty() || entry.upperName.find(searchUpper) != std::string::npos) {
+                    updated.insert(entry.name);
+                }
+            }
+            group->setPreferredTechniques(updated);
+            selectionChanged = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Untick All", ImVec2(btnW, 0))) {
+            if (searchBuf[0] == '\0') {
+                const std::unordered_set<std::string> empty;
+                group->setPreferredTechniques(empty);
+            } else {
+                std::shared_lock<std::shared_mutex> techLock(runtimeData.technique_mutex);
+                auto updated = group->preferredTechniques();
+                std::string searchUpper(searchBuf);
+                std::transform(searchUpper.begin(), searchUpper.end(), searchUpper.begin(),
+                               [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+                for (const auto& entry : runtimeData.techniqueUiCache) {
+                    if (entry.upperName.find(searchUpper) != std::string::npos) {
+                        updated.erase(entry.name);
+                    }
+                }
+                group->setPreferredTechniques(updated);
+            }
+            selectionChanged = true;
+        }
+
+        if (!canEditCheckboxes) {
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Switch to Exclusion Mode")) {
+                exceptions = true;
+                selectionChanged = true;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Enables 'Except for selected techniques' so you can pick techniques to exclude.");
+            }
+        }
+
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("|  %zu selected / %zu available", group->preferredTechniques().size(), availableCount);
+
+        ImGui::Separator();
+
+        const float tableH = std::max(120.0f, ImGui::GetContentRegionAvail().y - 8.0f);
+        const float availW = ImGui::GetContentRegionAvail().x;
+        const int numCols = (availW > 640.0f) ? 2 : 1;
+
+        if (!canEditCheckboxes) {
+            ImGui::BeginDisabled();
+        }
+
+        std::string searchUpper(searchBuf);
+        std::transform(searchUpper.begin(), searchUpper.end(), searchUpper.begin(),
+                       [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+
+        {
+            std::shared_lock<std::shared_mutex> techLock(runtimeData.technique_mutex);
+            if (runtimeData.techniqueUiCache.empty()) {
+                ImGui::Spacing();
+                ImGui::TextDisabled("No ReShade techniques detected. Make sure your effects are loaded.");
+            } else {
+                if (ImGui::BeginTable("TechniqueSelectionTable", numCols,
+                                      ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerV,
+                                      ImVec2(0.0f, tableH))) {
+                    for (int c = 0; c < numCols; ++c) {
+                        ImGui::TableSetupColumn(nullptr, ImGuiTableColumnFlags_WidthStretch);
+                    }
+
+                    int matchCount = 0;
+                    for (const auto& entry : runtimeData.techniqueUiCache) {
+                        if (!searchUpper.empty() && entry.upperName.find(searchUpper) == std::string::npos)
+                            continue;
+
+                        matchCount++;
+                        ImGui::TableNextColumn();
+                        bool enabled = group->preferredTechniques().contains(entry.name);
+                        ImGui::PushID(entry.name.c_str());
+                        if (ImGui::Checkbox(entry.name.c_str(), &enabled)) {
+                            auto updated = group->preferredTechniques();
+                            if (enabled)
+                                updated.insert(entry.name);
+                            else
+                                updated.erase(entry.name);
+                            group->setPreferredTechniques(updated);
+                            selectionChanged = true;
+                        }
+
+                        if (entry.effect != nullptr && !entry.effect->enabled) {
+                            ImGui::SameLine();
+                            ImGui::TextDisabled("(off in ReShade)");
+                        }
+                        ImGui::PopID();
+                    }
+
+                    if (matchCount == 0 && !searchUpper.empty()) {
+                        ImGui::TableNextColumn();
+                        ImGui::TextDisabled("No techniques matching \"%s\"", searchBuf);
+                    }
+
+                    ImGui::EndTable();
+                }
+            }
+        }
+
+        if (!canEditCheckboxes) {
+            ImGui::EndDisabled();
+        }
+
+        EndCard();
+    }
+
+    if (allowAll != oldAllowAll || exceptions != oldExceptions) {
+        group->setHasTechniqueExceptions(exceptions);
+        group->setAllowAllTechniques(allowAll);
+        selectionChanged = true;
+    }
 
     if (selectionChanged) {
         std::shared_lock<std::shared_mutex> techLock(runtimeData.technique_mutex);
@@ -661,7 +754,9 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
                                  Rendering::ResourceManager& resManager,
                                  reshade::api::effect_runtime* runtime,
                                  ShaderToggler::ToggleGroup* group) {
-    static float height = ImGui::GetWindowHeight();
+    const float totalAvailH = ImGui::GetContentRegionAvail().y;
+    static float splitRatio = 0.55f;
+    float topHeight = std::clamp(totalAvailH * splitRatio, 140.0f, std::max(140.0f, totalAvailH - 100.0f));
 
     const char* typeSelectedItem = invocationDescription[group->getInvocationLocation()];
     uint32_t selectedIndex = group->getInvocationLocation();
@@ -679,7 +774,6 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
     bool preserveAlpha = group->getPreserveAlpha();
     bool flipbuffer = group->getFlipBuffer();
     bool autoSceneColour = group->getAutoRenderSRV();
-    bool suppressDraw = group->getSuppressDrawCall();
 
     static const char* swapchainMatchOptions[] = { "RESOLUTION", "ASPECT RATIO", "EXTENDED ASPECT RATIO", "NONE" };
     uint32_t selectedSwapchainMatchMode = group->getMatchSwapchainResolution();
@@ -690,7 +784,7 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
     const bool supportsSRVwrite = deviceApi < reshade::api::device_api::d3d12;
 
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-    if (ImGui::BeginChild("RenderTargets", { 0, height / 1.5f }, true, ImGuiChildFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginChild("RenderTargets", { 0, topHeight }, true)) {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
 
         const float labelColWidth = std::max(220.0f, ImGui::CalcTextSize("Preserve target alpha channel   ").x);
@@ -1101,71 +1195,6 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
                 }
             }
 
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("Suppress draw calls");
-            ImGui::TableNextColumn();
-            DrawTableToggleSwitch("##SuppressDrawCall", &suppressDraw);
-
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("Filter by index count");
-            ImGui::TableNextColumn();
-            bool matchIdx = group->getMatchIndexCount();
-            if (DrawTableToggleSwitch("##MatchIdx", &matchIdx)) {
-                group->setMatchIndexCount(matchIdx);
-            }
-            if (matchIdx) {
-                int idxMin = static_cast<int>(group->getIndexCountMin());
-                int idxMax = static_cast<int>(group->getIndexCountMax());
-                ImGui::AlignTextToFramePadding();
-                ImGui::Text("Min:");
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(70.0f);
-                if (ImGui::InputInt("Min##Idx", &idxMin, 0)) {
-                    group->setIndexCountMin(std::max(0, idxMin));
-                }
-                ImGui::SameLine();
-                ImGui::AlignTextToFramePadding();
-                ImGui::Text("Max:");
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(70.0f);
-                if (ImGui::InputInt("Max##Idx", &idxMax, 0)) {
-                    group->setIndexCountMax(std::max(0, idxMax));
-                }
-            }
-
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("Filter by vertex count");
-            ImGui::TableNextColumn();
-            bool matchVtx = group->getMatchVertexCount();
-            if (DrawTableToggleSwitch("##MatchVtx", &matchVtx)) {
-                group->setMatchVertexCount(matchVtx);
-            }
-            if (matchVtx) {
-                int vtxMin = static_cast<int>(group->getVertexCountMin());
-                int vtxMax = static_cast<int>(group->getVertexCountMax());
-                ImGui::AlignTextToFramePadding();
-                ImGui::Text("Min:");
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(70.0f);
-                if (ImGui::InputInt("Min##Vtx", &vtxMin, 0)) {
-                    group->setVertexCountMin(std::max(0, vtxMin));
-                }
-                ImGui::SameLine();
-                ImGui::AlignTextToFramePadding();
-                ImGui::Text("Max:");
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(70.0f);
-                if (ImGui::InputInt("Max##Vtx", &vtxMax, 0)) {
-                    group->setVertexCountMax(std::max(0, vtxMax));
-                }
-            }
-
             ImGui::EndTable();
         }
 
@@ -1176,10 +1205,6 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
         group->setToneMap(tonemap);
         group->setPreserveAlpha(preserveAlpha);
         group->setFlipBuffer(flipbuffer);
-        group->setSuppressDrawCall(suppressDraw);
-
-        ImGui::Separator();
-        DisplayTechniqueSelection(runtime, instance, group, ImGui::GetWindowWidth() / 3);
 
         ImGui::PopStyleVar();
     }
@@ -1188,8 +1213,8 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
     ImGui::PushID(4);
     ImGui::Button("", ImVec2(-1, 8.0f));
     ImGui::PopID();
-    if (ImGui::IsItemActive())
-        height += ImGui::GetIO().MouseDelta.y;
+    if (ImGui::IsItemActive() && totalAvailH > 200.0f)
+        splitRatio = std::clamp(splitRatio + ImGui::GetIO().MouseDelta.y / totalAvailH, 0.2f, 0.85f);
 
     DisplayPreview(instance, resManager, runtime, group);
 
@@ -1984,13 +2009,23 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
 
                 if (instance.GetShowObservedDraws()) {
                     const auto observedDraws = selectedShaderManager->getObservedDrawGeometries();
+                    const uint32_t activeHash = selectedShaderManager->getActiveHuntedShaderHash();
                     if (BeginCard("##observed_draws_pane", "OBSERVED DRAWS FOR ACTIVE SHADER")) {
-                        if (observedDraws.empty()) {
-                            ImGui::TextDisabled("No draw calls observed for the active shader yet.");
+                        if (activeHash == 0) {
+                            ImGui::TextDisabled("No active shader selected in list.");
+                        } else if (observedDraws.empty()) {
+                            ImGui::TextDisabled("No draw calls observed for 0x%08X yet.", activeHash);
                         } else {
-                            ImGui::TextDisabled("%zu draw variation(s) observed for this shader:", observedDraws.size());
-                            float scrollH = std::min(130.0f, static_cast<float>(observedDraws.size()) * 26.0f + 12.0f);
-                            if (ImGui::BeginChild("##observedDrawsScroll", ImVec2(0, scrollH), true)) {
+                            ImGui::TextDisabled("%zu draw variation(s) observed for 0x%08X:", observedDraws.size(), activeHash);
+                        }
+
+                        const float boxHeight = 85.0f;
+                        if (ImGui::BeginChild("##observedDrawsScroll", ImVec2(0, boxHeight), true)) {
+                            if (activeHash == 0) {
+                                ImGui::TextDisabled("Select a shader from the left hunting list.");
+                            } else if (observedDraws.empty()) {
+                                ImGui::TextDisabled("Draw geometry stats will appear here when this shader renders.");
+                            } else {
                                 for (size_t di = 0; di < observedDraws.size(); di++) {
                                     const auto& d = observedDraws[di];
                                     ImGui::PushID(static_cast<int>(di));
@@ -2019,9 +2054,9 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
                                     }
                                     ImGui::PopID();
                                 }
-                                ImGui::EndChild();
                             }
                         }
+                        ImGui::EndChild();
                         EndCard();
                     }
                 }
@@ -2030,9 +2065,14 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
 
                 ImGuiTabBarFlags tab_bar_flags = ImGuiTabBarFlags_None;
                 if (ImGui::BeginTabBar("MyTabBar", tab_bar_flags)) {
-                    if (ImGui::BeginTabItem("Effects")) {
+                    if (ImGui::BeginTabItem("Render targets")) {
                         instance.SetCurrentTabType(AddonImGui::TAB_RENDER_TARGET);
                         DisplayRenderTargets(instance, resManager, runtime, group);
+                        ImGui::EndTabItem();
+                    }
+                    if (ImGui::BeginTabItem("Techniques")) {
+                        instance.SetCurrentTabType(AddonImGui::TAB_TECHNIQUE);
+                        DisplayTechniqueSelection(runtime, instance, group);
                         ImGui::EndTabItem();
                     }
                     if (ImGui::BeginTabItem("Constant bindings")) {

@@ -337,8 +337,9 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
             ImGui::InputText("Offset", offsetInputBuf, offsetInputBufSize, ImGuiInputTextFlags_CharsHexadecimal);
 
             static bool prevValue = false;
-
-            ImGui::Checkbox("Use previous value", &prevValue);
+            ImGui::Spacing();
+            DrawToggleRow("Use previous value", &prevValue, "Sample constant value from previous frame", nullptr, 4.0f);
+            ImGui::Spacing();
 
             ImGui::Separator();
 

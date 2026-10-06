@@ -40,6 +40,7 @@
 #include <reshade_api_pipeline.hpp>
 #include <shared_mutex>
 #include <tsl/robin_map.h>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -195,7 +196,7 @@ class ShaderManager {
     bool _hideMarkedShaders = false;
     bool _hideHuntedShader = true;
 
-    std::vector<DrawGeometryStats> _observedDrawGeometries;
+    std::unordered_map<uint32_t, std::vector<DrawGeometryStats>> _observedDrawGeometries;
     mutable std::shared_mutex _drawGeometryMutex;
 };
 }
