@@ -122,12 +122,15 @@ void AddonUIData::RetireToggleGroup(int id)
     node.mapped().setActive(false);
     node.mapped().clearHashes();
 
+    std::erase(_toggleGroupOrder, id);
+
     _retiredToggleGroups.insert(std::move(node));
 }
 
 
 void AddonUIData::RetireAllToggleGroups()
 {
+    _toggleGroupOrder.clear();
     while (!_toggleGroups.empty())
     {
         RetireToggleGroup(_toggleGroups.begin()->first);
@@ -212,8 +215,12 @@ void AddonUIData::UpdateToggleGroupsForShaderHashes()
     _vertexShaderHashToToggleGroups.clear();
     _computeShaderHashToToggleGroups.clear();
 
-    for (auto& [_,group] : _toggleGroups)
+    for (int id : _toggleGroupOrder)
     {
+        auto it = _toggleGroups.find(id);
+        if (it == _toggleGroups.end()) continue;
+        auto& group = it->second;
+
         // Only consider the currently hunted hash for the group being edited
         if (group.getId() == _toggleGroupIdShaderEditing && (_pixelShaderManager->isInHuntingMode() || _vertexShaderManager->isInHuntingMode() || _computeShaderManager->isInHuntingMode()))
         {
@@ -279,6 +286,7 @@ void AddonUIData::AddDefaultGroup()
     ToggleGroup toAdd("Default", ToggleGroup::getNewGroupId());
     toAdd.setToggleKey(0);
     toAdd.SetConfigDirtyFlag(&_configDirty);
+    _toggleGroupOrder.push_back(toAdd.getId());
     _toggleGroups.emplace(toAdd.getId(), toAdd);
     MarkConfigDirty();
 }
@@ -292,10 +300,33 @@ ToggleGroup* AddonUIData::CloneToggleGroup(int sourceGroupId)
     const int newId = ToggleGroup::getNewGroupId();
     ToggleGroup clone = source->second.cloneForNewId(newId);
     clone.SetConfigDirtyFlag(&_configDirty);
+    _toggleGroupOrder.push_back(newId);
     _toggleGroups.emplace(newId, std::move(clone));
     UpdateToggleGroupsForShaderHashes();
     MarkConfigDirty();
     return &_toggleGroups.at(newId);
+}
+
+void AddonUIData::MoveGroupUp(int id)
+{
+    auto it = std::find(_toggleGroupOrder.begin(), _toggleGroupOrder.end(), id);
+    if (it != _toggleGroupOrder.end() && it != _toggleGroupOrder.begin())
+    {
+        std::iter_swap(it, it - 1);
+        UpdateToggleGroupsForShaderHashes();
+        MarkConfigDirty();
+    }
+}
+
+void AddonUIData::MoveGroupDown(int id)
+{
+    auto it = std::find(_toggleGroupOrder.begin(), _toggleGroupOrder.end(), id);
+    if (it != _toggleGroupOrder.end() && (it + 1) != _toggleGroupOrder.end())
+    {
+        std::iter_swap(it, it + 1);
+        UpdateToggleGroupsForShaderHashes();
+        MarkConfigDirty();
+    }
 }
 
 
@@ -351,6 +382,7 @@ void AddonUIData::LoadShaderTogglerIniFile(const string& fileName)
     }
 
     _preventRuntimeReload = iniFile.GetBoolOrDefault("PreventRuntimeReload", "General", false);
+    _showObservedDraws = iniFile.GetBoolOrDefault("ShowObservedDraws", "General", false);
 
     for (uint32_t i = 0; i < ARRAYSIZE(KeybindNames); i++)
     {
@@ -367,6 +399,7 @@ void AddonUIData::LoadShaderTogglerIniFile(const string& fileName)
         _gamepadToggleAll = gpToggleAll;
     }
 
+    _toggleGroupOrder.clear();
     int groupCounter = 0;
     const int numberOfGroups = iniFile.GetInt("AmountGroups", "General");
     if (numberOfGroups == INT_MIN)
@@ -380,11 +413,15 @@ void AddonUIData::LoadShaderTogglerIniFile(const string& fileName)
         for (int i = 0; i < numberOfGroups; i++)
         {
             int nId = ToggleGroup::getNewGroupId();
-            const auto& xx = _toggleGroups.emplace(nId, ToggleGroup{"", nId });
+            _toggleGroups.emplace(nId, ToggleGroup{"", nId });
+            _toggleGroupOrder.push_back(nId);
         }
     }
-    for (auto& [_,group] : _toggleGroups)
+    for (int id : _toggleGroupOrder)
     {
+        auto it = _toggleGroups.find(id);
+        if (it == _toggleGroups.end()) continue;
+        auto& group = it->second;
         group.loadState(iniFile, groupCounter);		// groupCounter is normally 0 or greater. For when the old format is detected, it's -1 (and there's 1 group).
         group.SetConfigDirtyFlag(&_configDirty);
         groupCounter++;
@@ -424,6 +461,7 @@ void AddonUIData::SaveShaderTogglerIniFile(const string& fileName)
     iniFile.SetFloat("OverlayOpacity", _overlayOpacity, "", "General");
     iniFile.SetInt("ShaderCollectionFrames", _startValueFramecountCollectionPhase, "", "General");
     iniFile.SetBool("PreventRuntimeReload", _preventRuntimeReload, "", "General");
+    iniFile.SetBool("ShowObservedDraws", _showObservedDraws, "", "General");
 
     for (uint32_t i = 0; i < ARRAYSIZE(KeybindNames); i++)
     {
@@ -434,9 +472,11 @@ void AddonUIData::SaveShaderTogglerIniFile(const string& fileName)
     iniFile.SetInt("AmountGroups", static_cast<int>(_toggleGroups.size()), "", "General");
 
     int groupCounter = 0;
-    for (const auto& [_,group] : _toggleGroups)
+    for (int id : _toggleGroupOrder)
     {
-        group.saveState(iniFile, groupCounter);
+        auto it = _toggleGroups.find(id);
+        if (it == _toggleGroups.end()) continue;
+        it->second.saveState(iniFile, groupCounter);
         groupCounter++;
     }
 
@@ -516,6 +556,7 @@ ToggleGroup* AddonUIData::ImportToggleGroup(const std::string& serialized)
     imported.SetConfigDirtyFlag(&_configDirty);
     imported.setEditing(false);
 
+    _toggleGroupOrder.push_back(newId);
     _toggleGroups.emplace(newId, std::move(imported));
     UpdateToggleGroupsForShaderHashes();
     MarkConfigDirty();

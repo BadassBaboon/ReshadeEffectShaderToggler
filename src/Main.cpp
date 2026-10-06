@@ -51,6 +51,7 @@
 #include <chrono>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <functional>
 #include <imgui.h>
 #include <reshade.hpp>
@@ -65,8 +66,8 @@ using namespace AddonImGui;
 using namespace Shim::Constants;
 using namespace std;
 
-extern "C" __declspec(dllexport) const char* NAME = "Reshade Effect Shader Toggler";
-extern "C" __declspec(dllexport) const char* DESCRIPTION = "Addon which allows you to define groups of shaders to render Reshade effects on.";
+extern "C" __declspec(dllexport) const char* NAME = "Reshade Effect Shader Toggler (REST)";
+extern "C" __declspec(dllexport) const char* DESCRIPTION = "Allows creating toggle groups to selectively disable shaders or trigger ReShade effects.";
 
 constexpr auto MAX_EFFECT_HANDLES = 128;
 constexpr auto REST_VAR_ANNOTATION = "source";
@@ -635,8 +636,78 @@ static bool onUpdateBufferRegion(device* device, const void* data, resource reso
     return false;
 }
 
-static void displaySettings(effect_runtime* runtime) {
-    DisplaySettings(g_addonUIData, runtime);
+static void ensure_reshade_docking() {
+    const std::filesystem::path ini_path = g_basePath / "ReShade.ini";
+    std::ifstream in(ini_path);
+    if (!in.is_open()) return;
+
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+
+    // Dynamically find active DockId from [Window][###home] or [Window][###addons]
+    std::string targetDockId = "0x00000001";
+    size_t homePos = content.find("[Window][###home]");
+    if (homePos == std::string::npos) homePos = content.find("[Window][###addons]");
+    if (homePos != std::string::npos) {
+        size_t dockIdPos = content.find("DockId=", homePos);
+        if (dockIdPos != std::string::npos) {
+            dockIdPos += 7; // strlen("DockId=")
+            size_t commaPos = content.find_first_of(",\r\n", dockIdPos);
+            if (commaPos != std::string::npos) {
+                targetDockId = content.substr(dockIdPos, commaPos - dockIdPos);
+            }
+        }
+    }
+
+    const std::string restTag = "[Window][REST]";
+    size_t restPos = content.find(restTag);
+    bool modified = false;
+
+    if (restPos != std::string::npos) {
+        // [Window][REST] already exists: verify its DockId matches targetDockId
+        size_t dockIdPos = content.find("DockId=", restPos);
+        if (dockIdPos != std::string::npos) {
+            dockIdPos += 7;
+            size_t commaPos = content.find_first_of(",\r\n", dockIdPos);
+            if (commaPos != std::string::npos) {
+                std::string curDockId = content.substr(dockIdPos, commaPos - dockIdPos);
+                if (curDockId != targetDockId) {
+                    content.replace(dockIdPos, commaPos - dockIdPos, targetDockId);
+                    modified = true;
+                }
+            }
+        }
+    } else {
+        size_t overlay_pos = content.find("[OVERLAY]");
+        if (overlay_pos != std::string::npos) {
+            size_t window_pos = content.find("Window=", overlay_pos);
+            if (window_pos != std::string::npos) {
+                size_t eol = content.find_first_of("\r\n", window_pos);
+                if (eol == std::string::npos) eol = content.length();
+
+                const std::string entry = ",[Window][REST],Pos=8,,8,Size=1246,,1424,Collapsed=0,DockId=" + targetDockId + ",,6";
+                content.insert(eol, entry);
+                modified = true;
+            }
+        }
+    }
+
+    if (modified) {
+        std::ofstream out(ini_path, std::ios::trunc);
+        if (out.is_open()) {
+            out << content;
+            out.close();
+            reshade::log::message(reshade::log::level::info, "REST: registered default docking in ReShade.ini");
+        }
+    }
+}
+
+static void displayRestTab(effect_runtime* runtime) {
+    DisplayRestTab(g_addonUIData, runtime);
+}
+
+static void displayAddonsTab(effect_runtime* runtime) {
+    DisplayAddonsTab(g_addonUIData, runtime);
 }
 
 static void Init() {
@@ -907,8 +978,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID) {
             }
 
             g_dllPath = getModulePath(hModule);
-
-            g_addonUIData.SetBasePath(g_dllPath.parent_path());
+            g_basePath = g_dllPath.parent_path();
+            g_addonUIData.SetBasePath(g_basePath);
+            ensure_reshade_docking();
             g_addonUIData.LoadShaderTogglerIniFile();
 
             state_tracking::register_events(g_addonUIData.GetTrackDescriptors());
@@ -952,7 +1024,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID) {
             reshade::register_event<reshade::addon_event::draw_indexed>(onDrawIndexed);
             reshade::register_event<reshade::addon_event::draw_or_dispatch_indirect>(onDrawOrDispatchIndirect);
 
-            reshade::register_overlay(nullptr, &displaySettings);
+            reshade::register_overlay("REST", &displayRestTab);
+            reshade::register_overlay(nullptr, &displayAddonsTab);
             break;
         case DLL_PROCESS_DETACH:
             UnInit();
@@ -994,7 +1067,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID) {
             reshade::unregister_event<reshade::addon_event::draw_indexed>(onDrawIndexed);
             reshade::unregister_event<reshade::addon_event::draw_or_dispatch_indirect>(onDrawOrDispatchIndirect);
 
-            reshade::unregister_overlay(nullptr, &displaySettings);
+            reshade::unregister_overlay("REST", &displayRestTab);
+            reshade::unregister_overlay(nullptr, &displayAddonsTab);
 
             state_tracking::unregister_events();
 

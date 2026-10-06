@@ -129,6 +129,7 @@ class AddonUIData {
     std::atomic_int _toggleGroupIdEffectEditing = -1;
     std::atomic_int _toggleGroupIdConstantEditing = -1;
     std::unordered_map<int, ShaderToggler::ToggleGroup> _toggleGroups;
+    std::vector<int> _toggleGroupOrder;
     // Groups removed on the UI thread are moved here (via node handles, so the ToggleGroup objects keep
     // their addresses) instead of being destroyed. Render threads may still hold raw ToggleGroup* in
     // their per-command-list queues / caches, and destroying a group mid-frame is a use-after-free.
@@ -149,6 +150,7 @@ class AddonUIData {
     std::string _resourceShim = "none";
     bool _trackDescriptors = true;
     bool _preventRuntimeReload = false;
+    bool _showObservedDraws = false;
     std::filesystem::path _basePath;
     TabType _currentTab = TabType::TAB_NONE;
     std::atomic_bool _configDirty{ false };
@@ -183,6 +185,9 @@ class AddonUIData {
     void UpdateToggleGroupsForShaderHashes();
     void AddDefaultGroup();
     ShaderToggler::ToggleGroup* CloneToggleGroup(int sourceGroupId);
+    const std::vector<int>& GetToggleGroupOrder() const { return _toggleGroupOrder; }
+    void MoveGroupUp(int id);
+    void MoveGroupDown(int id);
     bool IsConfigDirty() const { return _configDirty.load(std::memory_order_acquire); }
     void MarkConfigDirty() { _configDirty.store(true, std::memory_order_release); }
     void MarkConfigClean() { _configDirty.store(false, std::memory_order_release); }
@@ -238,6 +243,8 @@ class AddonUIData {
     void SignalToggleGroupRemoved(reshade::api::effect_runtime*, ShaderToggler::ToggleGroup*);
     bool GetPreventRuntimeReload() const { return _preventRuntimeReload; }
     void SetPreventRuntimeReload(bool reload) { if (_preventRuntimeReload != reload) { _preventRuntimeReload = reload; MarkConfigDirty(); } }
+    bool GetShowObservedDraws() const { return _showObservedDraws; }
+    void SetShowObservedDraws(bool show) { if (_showObservedDraws != show) { _showObservedDraws = show; MarkConfigDirty(); } }
 
     void AssignPreferredGroupTechniques(std::unordered_map<std::string, EffectData>& allTechniques);
 };
