@@ -553,6 +553,7 @@ void AddonUIData::EndShaderEditing(bool acceptCollectedShaderHashes, ToggleGroup
     _vertexShaderManager->stopHuntingMode();
     _computeShaderManager->stopHuntingMode();
     _toggleGroupIdShaderEditing = -1;
+    _toggleGroupIdSettingsOpen = -1;
 
     UpdateToggleGroupsForShaderHashes();
 }

@@ -1183,12 +1183,6 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
                              reshade::api::effect_runtime* runtime,
                              ShaderToggler::ToggleGroup* group,
                              ShaderToggler::ShaderManager* shaderManager) {
-    if (!shaderManager->isInHuntingMode()) {
-        ImGui::TextDisabled("Shader hunting is not active.");
-        ImGui::TextWrapped("The group's committed shader hashes remain active while you inspect Auto Scene Colour and other settings.");
-        return;
-    }
-
     if (*instance.ActiveCollectorFrameCounter() > 0) {
         ImGui::Text("Collecting active shaders... %u frames remaining", instance.ActiveCollectorFrameCounter()->load());
         ImGui::TextDisabled("Keep the relevant scene visible until collection finishes.");
@@ -1378,12 +1372,10 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
     for (const uint32_t hash : missingMarkedHashes)
         addIfVisible(hash, false);
 
-    const float listWidth = ImGui::GetContentRegionAvail().x;
-    const int hashColumns = visibleHashes.size() >= 50 && listWidth >= 500.0f ? 2 : 1;
     const float listHeight = std::max(120.0f, ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - 6.0f);
 
     if (ImGui::BeginTable("ShaderHashView",
-                          hashColumns,
+                          1,
                           ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_ScrollY |
                             ImGuiTableFlags_NoBordersInBody,
                           ImVec2(0, listHeight))) {
@@ -1402,9 +1394,12 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
               ImGui::Selectable(hashText.c_str(), entry.collected && selectedHash == hash, ImGuiSelectableFlags_AllowDoubleClick);
 
             if (entry.collected) {
-                if (clicked && shaderManager->setActiveHuntedShaderHash(hash)) {
-                    if (ImGui::IsMouseDoubleClicked(0))
-                        shaderManager->toggleMarkOnHuntedShader();
+                if ((clicked || (ImGui::IsItemFocused() && selectedHash != hash)) && shaderManager->setActiveHuntedShaderHash(hash)) {
+                    instance.UpdateToggleGroupsForShaderHashes();
+                }
+
+                if ((clicked && ImGui::IsMouseDoubleClicked(0)) || (ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
+                    shaderManager->toggleMarkOnHuntedShader();
                     instance.UpdateToggleGroupsForShaderHashes();
                 }
             } else {
@@ -1418,26 +1413,10 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
                 ImGui::PopStyleColor();
         };
 
-        if (hashColumns == 1) {
-            for (const ShaderListEntry& entry : visibleHashes) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                drawHash(entry);
-            }
-        } else {
-            const size_t rows = (visibleHashes.size() + 1) / 2;
-            for (size_t row = 0; row < rows; ++row) {
-                ImGui::TableNextRow();
-
-                ImGui::TableSetColumnIndex(0);
-                drawHash(visibleHashes[row]);
-
-                const size_t rightIndex = row + rows;
-                if (rightIndex < visibleHashes.size()) {
-                    ImGui::TableSetColumnIndex(1);
-                    drawHash(visibleHashes[rightIndex]);
-                }
-            }
+        for (const ShaderListEntry& entry : visibleHashes) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            drawHash(entry);
         }
 
         ImGui::EndTable();
@@ -1448,9 +1427,9 @@ static std::atomic<bool> s_imguiWantTextInput = false;
 
 static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::ResourceManager& resManager, reshade::api::effect_runtime* runtime) {
     s_imguiWantTextInput.store(ImGui::GetIO().WantTextInput);
-    if (instance.GetToggleGroupIdSettingsOpen() >= 0) {
+    if (instance.GetToggleGroupIdShaderEditing() >= 0) {
         std::string editingGroupName = "";
-        const int idx = instance.GetToggleGroupIdSettingsOpen();
+        const int idx = instance.GetToggleGroupIdShaderEditing();
         ShaderToggler::ToggleGroup* group = nullptr;
         if (instance.GetToggleGroups().find(idx) != instance.GetToggleGroups().end()) {
             editingGroupName = instance.GetToggleGroups()[idx].getName();
@@ -1484,20 +1463,6 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
 
             if (ImGui::BeginChild("GroupView", { huntingUIState.shaderPaneWidth, 0 }, true, ImGuiWindowFlags_NoScrollbar)) {
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
-
-                const bool huntingThisGroup = instance.GetToggleGroupIdShaderEditing().load() == group->getId();
-                if (huntingThisGroup) {
-                    if (ImGui::Button("Done hunting")) {
-                        instance.EndShaderEditing(true, *group);
-                    }
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("Marks will be committed to this group.");
-                } else {
-                    if (ImGui::Button("Start shader hunting"))
-                        instance.StartShaderEditing(*group);
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("Settings remain open when hunting finishes.");
-                }
 
                 ImGui::PushItemWidth(ImGui::GetWindowWidth() - ImGui::GetStyle().FramePadding.x * 2 - ImGui::GetStyle().ItemSpacing.x * 2);
                 if (ImGui::BeginCombo("##shaderType", typeSelectedItem, ImGuiComboFlags_None)) {
@@ -2066,17 +2031,17 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
                 group.setEditing(true);
 
             ImGui::SameLine();
-            if (instance.GetToggleGroupIdSettingsOpen() >= 0) {
-                if (instance.GetToggleGroupIdSettingsOpen() == group.getId()) {
-                    if (ImGui::Button("Close"))
-                        instance.CloseGroupSettings(true, group);
+            if (instance.GetToggleGroupIdShaderEditing() >= 0) {
+                if (instance.GetToggleGroupIdShaderEditing() == group.getId()) {
+                    if (ImGui::Button(" Done "))
+                        instance.EndShaderEditing(true, group);
                 } else {
                     ImGui::BeginDisabled(true);
                     ImGui::Button("Settings");
                     ImGui::EndDisabled();
                 }
             } else if (ImGui::Button("Settings")) {
-                instance.OpenGroupSettings(group);
+                instance.StartShaderEditing(group);
             }
 
             ImGui::SameLine();

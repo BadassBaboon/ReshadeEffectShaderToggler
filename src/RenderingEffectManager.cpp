@@ -658,10 +658,6 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
         commandListData.cs.techniquesToRender.erase(g);
     }
 
-    if (!commandListData.ps.techniquesToRender.empty() || !commandListData.vs.techniquesToRender.empty() || !commandListData.cs.techniquesToRender.empty()) {
-        commandListData.commandQueue |= (invocation << (callLocation * MATCH_DELIMITER));
-    }
-
     if (rendered) {
         cmd_list->get_private_data<state_tracking>().apply(cmd_list);
     }

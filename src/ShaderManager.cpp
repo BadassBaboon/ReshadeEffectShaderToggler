@@ -231,7 +231,7 @@ bool ShaderManager::isBlockedShader(uint32_t shaderHash) {
     }
 
     bool toReturn = false;
-    if (_isInHuntingMode.load(memory_order_acquire) && _hideHuntedShader) {
+    if (_isInHuntingMode.load(memory_order_acquire)) {
         const uint32_t activeHash = _activeHuntedShaderHash.load(memory_order_acquire);
         toReturn |= (activeHash == shaderHash);
     }
