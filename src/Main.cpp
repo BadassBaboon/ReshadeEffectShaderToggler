@@ -578,6 +578,12 @@ static void CheckDrawCall(command_list* cmd_list, const uint64_t match_modifier 
 static bool onDraw(command_list* cmd_list, uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance) {
     CheckDrawCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS);
 
+    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    if (g_pixelShaderManager.isBlockedShader(commandListData.ps.activeShaderHash) ||
+        g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash)) {
+        return true;
+    }
+
     return false;
 }
 
@@ -595,6 +601,12 @@ static bool onDrawIndexed(command_list* cmd_list,
                           uint32_t first_instance) {
     CheckDrawCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS);
 
+    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    if (g_pixelShaderManager.isBlockedShader(commandListData.ps.activeShaderHash) ||
+        g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash)) {
+        return true;
+    }
+
     return false;
 }
 
@@ -609,6 +621,19 @@ static bool onDrawOrDispatchIndirect(command_list* cmd_list, indirect_command ty
             break;
         case indirect_command::dispatch:
             CheckDrawCall(cmd_list, Rendering::MATCH_CS);
+            break;
+    }
+
+    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    switch (type) {
+        case indirect_command::draw:
+        case indirect_command::draw_indexed:
+            if (g_pixelShaderManager.isBlockedShader(commandListData.ps.activeShaderHash) ||
+                g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash)) {
+                return true;
+            }
+            break;
+        default:
             break;
     }
 

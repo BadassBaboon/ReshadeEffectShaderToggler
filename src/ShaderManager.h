@@ -97,6 +97,12 @@ class ShaderManager {
     uint32_t getActiveHuntedShaderHash() const { return _activeHuntedShaderHash; }
     int getActiveHuntedShaderIndex() const { return _activeHuntedShaderIndex; }
     void toggleHideMarkedShaders() { _hideMarkedShaders = !_hideMarkedShaders; }
+    bool isHideMarkedShaders() const { return _hideMarkedShaders; }
+    void setHideMarkedShaders(bool hide) { _hideMarkedShaders = hide; }
+
+    bool isHideHuntedShader() const { return _hideHuntedShader; }
+    void setHideHuntedShader(bool hide) { _hideHuntedShader = hide; }
+    void toggleHideHuntedShader() { _hideHuntedShader = !_hideHuntedShader; }
 
     bool isHuntedShaderMarked() {
         std::shared_lock lock(_markedShaderHashMutex);
@@ -154,10 +160,11 @@ class ShaderManager {
 
     bool _isInHuntingMode = false;
     int32_t _activeHuntedShaderIndex = -1;
-    uint32_t _activeHuntedShaderHash;
+    uint32_t _activeHuntedShaderHash = 0;
     std::shared_mutex _collectedActiveHandlesMutex;
     std::shared_mutex _hashHandlesMutex;
     std::shared_mutex _markedShaderHashMutex;
     bool _hideMarkedShaders = false;
+    bool _hideHuntedShader = false;
 };
 }

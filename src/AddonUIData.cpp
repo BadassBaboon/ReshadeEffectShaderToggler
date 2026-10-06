@@ -331,10 +331,10 @@ void AddonUIData::EndShaderEditing(bool acceptCollectedShaderHashes, ToggleGroup
     if (acceptCollectedShaderHashes && _toggleGroupIdShaderEditing == groupEditing.getId())
     {
         groupEditing.storeCollectedHashes(_pixelShaderManager->getMarkedShaderHashes(), _vertexShaderManager->getMarkedShaderHashes(), _computeShaderManager->getMarkedShaderHashes());
-        _pixelShaderManager->stopHuntingMode();
-        _vertexShaderManager->stopHuntingMode();
-        _computeShaderManager->stopHuntingMode();
     }
+    _pixelShaderManager->stopHuntingMode();
+    _vertexShaderManager->stopHuntingMode();
+    _computeShaderManager->stopHuntingMode();
     _toggleGroupIdShaderEditing = -1;
 
     UpdateToggleGroupsForShaderHashes();

@@ -525,51 +525,99 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
     ImGui::PopStyleVar();
 }
 
+static uint32_t s_selectedShaderTypeIndex = 0;
+
+static void SwitchEditingShaderType(AddonImGui::AddonUIData& instance, uint32_t newIndex) {
+    if (newIndex > 2)
+        return;
+    if (newIndex != s_selectedShaderTypeIndex) {
+        s_selectedShaderTypeIndex = newIndex;
+        switch (newIndex) {
+            case 0:
+                instance.GetVertexShaderManager()->resetActiveHuntedShader();
+                instance.GetComputeShaderManager()->resetActiveHuntedShader();
+                break;
+            case 1:
+                instance.GetPixelShaderManager()->resetActiveHuntedShader();
+                instance.GetComputeShaderManager()->resetActiveHuntedShader();
+                break;
+            case 2:
+                instance.GetPixelShaderManager()->resetActiveHuntedShader();
+                instance.GetVertexShaderManager()->resetActiveHuntedShader();
+                break;
+        }
+        instance.UpdateToggleGroupsForShaderHashes();
+    }
+}
+
 static void DisplayGroupView(AddonImGui::AddonUIData& instance,
                              Rendering::ResourceManager& resManager,
                              reshade::api::effect_runtime* runtime,
                              ShaderToggler::ToggleGroup* group,
                              ShaderToggler::ShaderManager* shaderManager) {
-    float height = ImGui::GetWindowHeight();
-    float width = ImGui::GetWindowWidth();
-
-    if (*instance.ActiveCollectorFrameCounter() > 0) {
+    if (instance.ActiveCollectorFrameCounter()->load() > 0) {
+        ImGui::Text("Collecting active shaders (%u)...", static_cast<uint32_t>(instance.ActiveCollectorFrameCounter()->load()));
         return;
     }
 
     const std::unordered_set<uint32_t>& hashes = shaderManager->getCollectedShaderHashes();
-    static int32_t selected = -1;
+    if (hashes.empty()) {
+        ImGui::TextDisabled("No active shaders collected.");
+        ImGui::TextWrapped("Make sure 3D rendering is active or increase '# of frames to collect' in Settings.");
+        return;
+    }
+
+    static int32_t lastScrolledIndex = -1;
+    const int32_t activeIndex = shaderManager->getActiveHuntedShaderIndex();
     uint32_t index = 0;
-    ImGuiStyle style = ImGui::GetStyle();
+
+    float availHeight = ImGui::GetContentRegionAvail().y;
+    if (availHeight < 50.0f) {
+        availHeight = 200.0f;
+    }
 
     if (ImGui::BeginTable("ShaderHashView",
                           1,
                           ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY | ImGuiTableFlags_NoBordersInBody |
                             ImGuiTableColumnFlags_NoHeaderLabel,
-                          ImVec2(0, height - 47))) {
+                          ImVec2(0, availHeight))) {
         for (auto h : hashes) {
             ImGui::TableNextColumn();
 
-            bool marked = false;
-            if (shaderManager->isHuntedShaderMarked(shaderManager->getCollectedShaderHash(index))) {
-                marked = true;
+            bool marked = shaderManager->isHuntedShaderMarked(h);
+            if (marked) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
             }
 
-            if (ImGui::Selectable(std::format("{:#08x}", h).c_str(), selected == index, ImGuiSelectableFlags_AllowDoubleClick) &&
-                (ImGui::IsMouseDoubleClicked(0) || ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
-                shaderManager->toggleMarkOnHuntedShader();
+            const bool isSelected = (activeIndex == static_cast<int32_t>(index));
+            if (ImGui::Selectable(std::format("{:#08x}", h).c_str(), isSelected, ImGuiSelectableFlags_AllowDoubleClick)) {
+                shaderManager->setActivedHuntedShaderIndex(index);
+                instance.UpdateToggleGroupsForShaderHashes();
+
+                if (ImGui::IsMouseDoubleClicked(0)) {
+                    shaderManager->toggleMarkOnHuntedShader();
+                    instance.UpdateToggleGroupsForShaderHashes();
+                }
             }
 
             if (marked) {
                 ImGui::PopStyleColor();
             }
 
-            if (ImGui::IsItemFocused()) {
+            if (ImGui::IsItemFocused() && (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_DownArrow)) && activeIndex != static_cast<int32_t>(index)) {
                 shaderManager->setActivedHuntedShaderIndex(index);
                 instance.UpdateToggleGroupsForShaderHashes();
-                selected = index;
-            };
+            }
+
+            if (isSelected && ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+                shaderManager->toggleMarkOnHuntedShader();
+                instance.UpdateToggleGroupsForShaderHashes();
+            }
+
+            if (isSelected && lastScrolledIndex != activeIndex) {
+                ImGui::SetScrollHereY(0.5f);
+                lastScrolledIndex = activeIndex;
+            }
 
             index++;
         }
@@ -861,7 +909,10 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
     ImGui::PopStyleVar();
 }
 
+static std::atomic<bool> s_imguiWantTextInput = false;
+
 static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::ResourceManager& resManager, reshade::api::effect_runtime* runtime) {
+    s_imguiWantTextInput.store(ImGui::GetIO().WantTextInput);
     if (instance.GetToggleGroupIdShaderEditing() >= 0) {
         std::string editingGroupName = "";
         const int idx = instance.GetToggleGroupIdShaderEditing();
@@ -882,48 +933,23 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
         static float width = ImGui::GetWindowWidth();
 
         const char* typeItems[] = { "Pixel shader", "Vertex shader", "Compute Shader" };
-        static const char* typeSelectedItem = typeItems[0];
-        static uint32_t selectedIndex = 0;
 
         ShaderToggler::ShaderManager* selectedShaderManager =
-          selectedIndex == 0 ? instance.GetPixelShaderManager() : (selectedIndex == 1 ? instance.GetVertexShaderManager() : instance.GetComputeShaderManager());
+          s_selectedShaderTypeIndex == 0 ? instance.GetPixelShaderManager() : (s_selectedShaderTypeIndex == 1 ? instance.GetVertexShaderManager() : instance.GetComputeShaderManager());
 
         if (ImGui::Begin(std::format("Group settings ({})", editingGroupName).c_str(), &wndOpen)) {
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
             if (ImGui::BeginChild("GroupView", { width / 3.0f, 0 }, true, ImGuiWindowFlags_NoScrollbar)) {
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
 
-                DisplayGroupView(instance, resManager, runtime, group, selectedShaderManager);
-
                 ImGui::PushItemWidth(ImGui::GetWindowWidth() - ImGui::GetStyle().FramePadding.x * 2 - ImGui::GetStyle().ItemSpacing.x * 2);
-                if (ImGui::BeginCombo("##shaderType", typeSelectedItem, ImGuiComboFlags_None)) {
+                if (ImGui::BeginCombo("##shaderType", typeItems[s_selectedShaderTypeIndex], ImGuiComboFlags_None)) {
                     for (int n = 0; n < IM_ARRAYSIZE(typeItems); n++) {
-                        bool is_selected = (typeSelectedItem == typeItems[n]);
+                        bool is_selected = (s_selectedShaderTypeIndex == static_cast<uint32_t>(n));
                         if (ImGui::Selectable(typeItems[n], is_selected)) {
-                            if (n != selectedIndex) {
-                                // Reset hunting selections in other managers on switch
-                                switch (n) {
-                                    case 0: {
-                                        instance.GetVertexShaderManager()->resetActiveHuntedShader();
-                                        instance.GetComputeShaderManager()->resetActiveHuntedShader();
-                                    } break;
-                                    case 1: {
-                                        instance.GetPixelShaderManager()->resetActiveHuntedShader();
-                                        instance.GetComputeShaderManager()->resetActiveHuntedShader();
-                                    } break;
-                                    case 2: {
-                                        instance.GetPixelShaderManager()->resetActiveHuntedShader();
-                                        instance.GetVertexShaderManager()->resetActiveHuntedShader();
-                                    } break;
-                                    default:
-                                        break;
-                                }
-
-                                instance.UpdateToggleGroupsForShaderHashes();
+                            if (static_cast<uint32_t>(n) != s_selectedShaderTypeIndex) {
+                                SwitchEditingShaderType(instance, n);
                             }
-
-                            typeSelectedItem = typeItems[n];
-                            selectedIndex = n;
                         }
                         if (is_selected)
                             ImGui::SetItemDefaultFocus();
@@ -931,6 +957,30 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
                     ImGui::EndCombo();
                 }
                 ImGui::PopItemWidth();
+
+                bool hideHunted = selectedShaderManager->isHideHuntedShader();
+                if (ImGui::Checkbox("Hide hunted shader in 3D scene", &hideHunted)) {
+                    instance.GetPixelShaderManager()->setHideHuntedShader(hideHunted);
+                    instance.GetVertexShaderManager()->setHideHuntedShader(hideHunted);
+                    instance.GetComputeShaderManager()->setHideHuntedShader(hideHunted);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("When enabled, the currently selected shader is disabled in the 3D scene so you can identify it.");
+                }
+
+                bool hideMarked = selectedShaderManager->isHideMarkedShaders();
+                if (ImGui::Checkbox("Hide marked shaders", &hideMarked)) {
+                    instance.GetPixelShaderManager()->setHideMarkedShaders(hideMarked);
+                    instance.GetVertexShaderManager()->setHideMarkedShaders(hideMarked);
+                    instance.GetComputeShaderManager()->setHideMarkedShaders(hideMarked);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("When enabled, all shaders currently marked in this group are disabled in the 3D scene.");
+                }
+
+                ImGui::Separator();
+
+                DisplayGroupView(instance, resManager, runtime, group, selectedShaderManager);
 
                 ImGui::PopStyleVar();
             }
@@ -978,6 +1028,7 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
         ImGui::End();
 
         if (!wndOpen) {
+            s_selectedShaderTypeIndex = 0;
             instance.SetCurrentTabType(AddonImGui::TAB_NONE);
             instance.EndShaderEditing(true, *group);
         }
@@ -989,11 +1040,75 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
 static void CheckHotkeys(AddonImGui::AddonUIData& instance, reshade::api::effect_runtime* runtime) {
     if (*instance.ActiveCollectorFrameCounter() > 0) {
         --(*instance.ActiveCollectorFrameCounter());
+        return;
     }
 
-    // Don't process toggle hotkeys while the user is editing a binding in the
-    // overlay, otherwise the captured key would also flip groups.
+    // When the user is editing shaders in the overlay, process hunting hotkeys
+    // instead of normal group toggle keys so the user can cycle and mark shaders.
     if (instance.GetToggleGroupIdShaderEditing() >= 0) {
+        if (!s_imguiWantTextInput.load()) {
+            // Pixel shader keybindings
+            const uint32_t psMarkedUpKey = instance.GetKeybinding(AddonImGui::Keybind::PIXEL_SHADER_MARKED_UP);
+            const uint32_t psMarkedDownKey = instance.GetKeybinding(AddonImGui::Keybind::PIXEL_SHADER_MARKED_DOWN);
+            const uint32_t psUpKey = instance.GetKeybinding(AddonImGui::Keybind::PIXEL_SHADER_UP);
+            const uint32_t psDownKey = instance.GetKeybinding(AddonImGui::Keybind::PIXEL_SHADER_DOWN);
+            const uint32_t psMarkKey = instance.GetKeybinding(AddonImGui::Keybind::PIXEL_SHADER_MARK);
+
+            // Vertex shader keybindings
+            const uint32_t vsMarkedUpKey = instance.GetKeybinding(AddonImGui::Keybind::VERTEX_SHADER_MARKED_UP);
+            const uint32_t vsMarkedDownKey = instance.GetKeybinding(AddonImGui::Keybind::VERTEX_SHADER_MARKED_DOWN);
+            const uint32_t vsUpKey = instance.GetKeybinding(AddonImGui::Keybind::VERTEX_SHADER_UP);
+            const uint32_t vsDownKey = instance.GetKeybinding(AddonImGui::Keybind::VERTEX_SHADER_DOWN);
+            const uint32_t vsMarkKey = instance.GetKeybinding(AddonImGui::Keybind::VERTEX_SHADER_MARK);
+
+            const bool ctrlDown = runtime->is_key_down(0x11);
+
+            // Pixel shader navigation
+            if (psMarkedUpKey != 0 && ShaderToggler::areKeysPressed(psMarkedUpKey, runtime)) {
+                SwitchEditingShaderType(instance, 0);
+                instance.GetPixelShaderManager()->huntNextShader(true);
+                instance.UpdateToggleGroupsForShaderHashes();
+            } else if (psMarkedDownKey != 0 && ShaderToggler::areKeysPressed(psMarkedDownKey, runtime)) {
+                SwitchEditingShaderType(instance, 0);
+                instance.GetPixelShaderManager()->huntPreviousShader(true);
+                instance.UpdateToggleGroupsForShaderHashes();
+            } else if (psUpKey != 0 && ShaderToggler::areKeysPressed(psUpKey, runtime) && ((psUpKey >> 8 & 0xFF) != 0 || !ctrlDown)) {
+                SwitchEditingShaderType(instance, 0);
+                instance.GetPixelShaderManager()->huntNextShader(false);
+                instance.UpdateToggleGroupsForShaderHashes();
+            } else if (psDownKey != 0 && ShaderToggler::areKeysPressed(psDownKey, runtime) && ((psDownKey >> 8 & 0xFF) != 0 || !ctrlDown)) {
+                SwitchEditingShaderType(instance, 0);
+                instance.GetPixelShaderManager()->huntPreviousShader(false);
+                instance.UpdateToggleGroupsForShaderHashes();
+            } else if (psMarkKey != 0 && ShaderToggler::areKeysPressed(psMarkKey, runtime)) {
+                SwitchEditingShaderType(instance, 0);
+                instance.GetPixelShaderManager()->toggleMarkOnHuntedShader();
+                instance.UpdateToggleGroupsForShaderHashes();
+            }
+
+            // Vertex shader navigation
+            if (vsMarkedUpKey != 0 && ShaderToggler::areKeysPressed(vsMarkedUpKey, runtime)) {
+                SwitchEditingShaderType(instance, 1);
+                instance.GetVertexShaderManager()->huntNextShader(true);
+                instance.UpdateToggleGroupsForShaderHashes();
+            } else if (vsMarkedDownKey != 0 && ShaderToggler::areKeysPressed(vsMarkedDownKey, runtime)) {
+                SwitchEditingShaderType(instance, 1);
+                instance.GetVertexShaderManager()->huntPreviousShader(true);
+                instance.UpdateToggleGroupsForShaderHashes();
+            } else if (vsUpKey != 0 && ShaderToggler::areKeysPressed(vsUpKey, runtime) && ((vsUpKey >> 8 & 0xFF) != 0 || !ctrlDown)) {
+                SwitchEditingShaderType(instance, 1);
+                instance.GetVertexShaderManager()->huntNextShader(false);
+                instance.UpdateToggleGroupsForShaderHashes();
+            } else if (vsDownKey != 0 && ShaderToggler::areKeysPressed(vsDownKey, runtime) && ((vsDownKey >> 8 & 0xFF) != 0 || !ctrlDown)) {
+                SwitchEditingShaderType(instance, 1);
+                instance.GetVertexShaderManager()->huntPreviousShader(false);
+                instance.UpdateToggleGroupsForShaderHashes();
+            } else if (vsMarkKey != 0 && ShaderToggler::areKeysPressed(vsMarkKey, runtime)) {
+                SwitchEditingShaderType(instance, 1);
+                instance.GetVertexShaderManager()->toggleMarkOnHuntedShader();
+                instance.UpdateToggleGroupsForShaderHashes();
+            }
+        }
         return;
     }
 
@@ -1044,6 +1159,7 @@ static void ShowHelpMarker(const char* desc) {
 }
 
 static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::effect_runtime* runtime) {
+    s_imguiWantTextInput.store(ImGui::GetIO().WantTextInput);
     DisplayAbout();
 
     if (ImGui::CollapsingHeader("General info and help")) {
@@ -1179,6 +1295,7 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
             if (instance.GetToggleGroupIdShaderEditing() >= 0) {
                 if (instance.GetToggleGroupIdShaderEditing() == group.getId()) {
                     if (ImGui::Button(" Done ")) {
+                        s_selectedShaderTypeIndex = 0;
                         instance.EndShaderEditing(true, group);
                     }
                 } else {
@@ -1188,6 +1305,7 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
                 }
             } else {
                 if (ImGui::Button("Settings")) {
+                    s_selectedShaderTypeIndex = 0;
                     ImGui::SameLine();
                     instance.StartShaderEditing(group);
                 }

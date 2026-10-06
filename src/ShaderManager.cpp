@@ -224,13 +224,18 @@ void ShaderManager::setActivedHuntedShaderIndex(uint32_t index) {
 }
 
 bool ShaderManager::isBlockedShader(uint32_t shaderHash) {
+    if (shaderHash == 0) {
+        return false;
+    }
+
     bool toReturn = false;
-    if (_isInHuntingMode) {
+    if (_isInHuntingMode && _hideHuntedShader) {
         // get the shader hash bound to this pipeline handle
-        toReturn |= shaderHash <= 0 ? false : _activeHuntedShaderHash == shaderHash;
+        toReturn |= (_activeHuntedShaderHash == shaderHash);
     }
     if (_hideMarkedShaders) {
         // check if the shader hash is part of the toggle group
+        std::shared_lock lock(_markedShaderHashMutex);
         toReturn |= _markedShaderHashes.contains(shaderHash);
     }
 
