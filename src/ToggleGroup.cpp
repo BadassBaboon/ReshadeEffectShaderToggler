@@ -125,6 +125,7 @@ ToggleGroup::ToggleGroup(const ToggleGroup& other)
     _matchInstanceCount = other._matchInstanceCount;
     _instanceCountMin = other._instanceCountMin;
     _instanceCountMax = other._instanceCountMax;
+    _gamepadShortcut = other._gamepadShortcut;
     _matchSwapchainResolution = other._matchSwapchainResolution;
     _bindingMatchSwapchainResolution = other._bindingMatchSwapchainResolution;
     _requeueAfterRTMatchingFailure = other._requeueAfterRTMatchingFailure;
@@ -322,6 +323,7 @@ void ToggleGroup::saveState(CDataFile& iniFile, int groupCounter) const {
     iniFile.SetBool("MatchInstanceCount", _matchInstanceCount, "", sectionRoot);
     iniFile.SetUInt("InstanceCountMin", _instanceCountMin, "", sectionRoot);
     iniFile.SetUInt("InstanceCountMax", _instanceCountMax, "", sectionRoot);
+    iniFile.SetUInt("GamepadShortcut", _gamepadShortcut, "", sectionRoot);
 }
 
 static std::vector<std::string> split(std::string& str, char delimiter) {
@@ -579,5 +581,8 @@ void ToggleGroup::loadState(CDataFile& iniFile, int groupCounter) {
     _instanceCountMin = (instMin == UINT_MAX) ? 0 : instMin;
     uint32_t instMax = iniFile.GetUInt("InstanceCountMax", sectionRoot);
     _instanceCountMax = (instMax == UINT_MAX) ? 0 : instMax;
+
+    uint32_t gp = iniFile.GetUInt("GamepadShortcut", sectionRoot);
+    _gamepadShortcut = (gp == UINT_MAX) ? 0 : gp;
 }
 }

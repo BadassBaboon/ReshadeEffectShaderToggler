@@ -111,6 +111,7 @@ class AddonUIData {
     int _startValueFramecountCollectionPhase = FRAMECOUNT_COLLECTION_PHASE_DEFAULT;
     float _overlayOpacity = 0.2f;
     uint32_t _keyBindings[ARRAYSIZE(KeybindNames)];
+    uint32_t _gamepadToggleAll = 0;
     std::string _constHookType = "default";
     std::string _constHookCopyType = "gpu_readback";
     std::string _resourceShim = "none";
@@ -181,6 +182,8 @@ class AddonUIData {
     void SetConstHookCopyType(std::string& copyType) { _constHookCopyType = copyType; }
     void SetResourceShim(std::string& shim) { _resourceShim = shim; }
     void SetKeybinding(Keybind keybind, uint32_t keys);
+    uint32_t GetGamepadToggleAll() const { return _gamepadToggleAll; }
+    void SetGamepadToggleAll(uint32_t val) { _gamepadToggleAll = val; }
     const std::unordered_map<std::string, std::tuple<Shim::Constants::constant_type, std::vector<reshade::api::effect_uniform_variable>>>* GetRESTVariables() {
         return _constantHandler->GetRESTVariables();
     };

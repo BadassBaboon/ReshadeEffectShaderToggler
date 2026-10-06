@@ -34,6 +34,7 @@
 #include "AddonUIAbout.h"
 #include "AddonUIConstants.h"
 #include "ConstantManager.h"
+#include "GamepadMonitor.h"
 #include "KeyData.h"
 #include "ResourceManager.h"
 #include <algorithm>
@@ -80,6 +81,73 @@ static bool key_input_box(const char* name, uint32_t* keys, const reshade::api::
     }
 
     return false;
+}
+
+static bool gamepad_input_box(const char* name, uint32_t* shortcut) {
+    auto& gpMonitor = ShaderToggler::GamepadMonitor::getInstance();
+    const bool isConnected = gpMonitor.isConnected();
+
+    static ImGuiID s_activeGamepadWidget = 0;
+    static uint32_t s_accumulatedCombo = 0;
+
+    const ImGuiID currentWidgetId = ImGui::GetID(name);
+    char buf[64];
+    buf[0] = '\0';
+    if (s_activeGamepadWidget == currentWidgetId && s_accumulatedCombo != 0) {
+        std::string str = ShaderToggler::GamepadMonitor::buttonsToString(s_accumulatedCombo);
+        strncpy_s(buf, sizeof(buf), str.c_str(), sizeof(buf) - 1);
+    } else if (*shortcut != 0) {
+        std::string str = ShaderToggler::GamepadMonitor::buttonsToString(*shortcut);
+        strncpy_s(buf, sizeof(buf), str.c_str(), sizeof(buf) - 1);
+    }
+
+    const char* hint = isConnected ? ((s_activeGamepadWidget == currentWidgetId) ? "Press buttons..." : "Click to set controller combo")
+                                   : "No controller connected";
+
+    ImGui::InputTextWithHint(name,
+                             hint,
+                             buf,
+                             sizeof(buf),
+                             ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoUndoRedo | ImGuiInputTextFlags_NoHorizontalScroll);
+
+    bool valueChanged = false;
+
+    if (ImGui::IsItemActive()) {
+        if (s_activeGamepadWidget != currentWidgetId) {
+            s_activeGamepadWidget = currentWidgetId;
+            s_accumulatedCombo = 0;
+        }
+
+        if (ImGui::IsKeyPressed(ImGuiKey_Backspace) || ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+            *shortcut = 0;
+            s_accumulatedCombo = 0;
+            valueChanged = true;
+        } else if (isConnected) {
+            const uint32_t cur = gpMonitor.getCurrentButtons();
+            if (cur != 0) {
+                s_accumulatedCombo |= cur;
+            } else if (s_accumulatedCombo != 0) {
+                *shortcut = s_accumulatedCombo;
+                s_accumulatedCombo = 0;
+                valueChanged = true;
+            }
+        }
+    } else {
+        if (s_activeGamepadWidget == currentWidgetId) {
+            if (s_accumulatedCombo != 0) {
+                *shortcut = s_accumulatedCombo;
+                s_accumulatedCombo = 0;
+                valueChanged = true;
+            }
+            s_activeGamepadWidget = 0;
+        }
+    }
+
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Click to focus, hold your controller button combination (e.g. LB + D-Pad Down), then release.\nPress Backspace or Delete to clear.\nSupported: D-Pad, A/B/X/Y, LB/RB, LT/RT, Start, Back, Thumb clicks.");
+    }
+
+    return valueChanged;
 }
 
 static constexpr const char* invocationDescription[] = { "BEFORE DRAW", "AFTER DRAW", "ON RENDER TARGET CHANGE" };
@@ -1149,6 +1217,9 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
 }
 
 static void CheckHotkeys(AddonImGui::AddonUIData& instance, reshade::api::effect_runtime* runtime) {
+    auto& gpMonitor = ShaderToggler::GamepadMonitor::getInstance();
+    gpMonitor.update();
+
     if (*instance.ActiveCollectorFrameCounter() > 0) {
         --(*instance.ActiveCollectorFrameCounter());
         return;
@@ -1228,7 +1299,16 @@ static void CheckHotkeys(AddonImGui::AddonUIData& instance, reshade::api::effect
     // Global "toggle all groups": flips every group to the opposite of the
     // current majority state so a single press reliably hides/shows everything.
     const uint32_t toggleAllKey = instance.GetKeybinding(AddonImGui::Keybind::TOGGLE_ALL_GROUPS);
+    const uint32_t toggleAllGamepad = instance.GetGamepadToggleAll();
+    bool triggerToggleAll = false;
     if (toggleAllKey != 0 && ShaderToggler::areKeysPressed(toggleAllKey, runtime)) {
+        triggerToggleAll = true;
+    }
+    if (toggleAllGamepad != 0 && gpMonitor.isComboTriggered(toggleAllGamepad)) {
+        triggerToggleAll = true;
+    }
+
+    if (triggerToggleAll) {
         size_t activeCount = 0;
         for (const auto& [_, group] : groups) {
             if (group.isActive())
@@ -1245,10 +1325,19 @@ static void CheckHotkeys(AddonImGui::AddonUIData& instance, reshade::api::effect
         }
     }
 
-    // Per-group toggle keys.
+    // Per-group toggle keys and controller shortcuts.
     for (auto& [_, group] : groups) {
+        bool triggered = false;
         const uint32_t key = group.getToggleKey();
         if (key != 0 && ShaderToggler::areKeysPressed(key, runtime)) {
+            triggered = true;
+        }
+        const uint32_t gpShortcut = group.getGamepadShortcut();
+        if (gpShortcut != 0 && gpMonitor.isComboTriggered(gpShortcut)) {
+            triggered = true;
+        }
+
+        if (triggered) {
             const bool wasActive = group.isActive();
             group.toggleActive();
             if (wasActive && instance.GetConstantHandler() != nullptr) {
@@ -1350,6 +1439,14 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
     }
 
     if (ImGui::CollapsingHeader("Keybindings", ImGuiTreeNodeFlags_None)) {
+        auto& gp = ShaderToggler::GamepadMonitor::getInstance();
+        if (gp.isConnected()) {
+            ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "Controller: Connected (User %d)", gp.getActiveUserIndex());
+        } else {
+            ImGui::TextDisabled("Controller: Not connected (connect any XInput gamepad)");
+        }
+        ImGui::Separator();
+
         for (uint32_t i = 0; i < IM_ARRAYSIZE(AddonImGui::KeybindNames); i++) {
             uint32_t keys = instance.GetKeybinding(static_cast<AddonImGui::Keybind>(i));
             ImGui::PushItemWidth(ImGui::GetWindowWidth() * 0.35f);
@@ -1358,6 +1455,21 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
             }
             ImGui::PopItemWidth();
         }
+
+        ImGui::Spacing();
+        ImGui::Text("Controller Shortcuts");
+        ImGui::PushItemWidth(ImGui::GetWindowWidth() * 0.35f);
+        uint32_t gpToggleAll = instance.GetGamepadToggleAll();
+        if (gamepad_input_box("##ToggleAllGp", &gpToggleAll)) {
+            instance.SetGamepadToggleAll(gpToggleAll);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear##ClearGpToggleAll")) {
+            instance.SetGamepadToggleAll(0);
+        }
+        ImGui::SameLine();
+        ImGui::Text("Toggle ALL groups on/off (Pad)");
+        ImGui::PopItemWidth();
     }
 
     if (ImGui::CollapsingHeader("List of Toggle Groups", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1423,8 +1535,15 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
             }
 
             ImGui::SameLine();
-            if (group.getToggleKey() > 0) {
-                ImGui::Text(" %s (%s)", group.getName().c_str(), ShaderToggler::reshade_key_name(group.getToggleKey()).c_str());
+            const std::string keyStr = group.getToggleKey() > 0 ? ShaderToggler::reshade_key_name(group.getToggleKey()) : "";
+            const std::string padStr = group.getGamepadShortcut() > 0 ? ShaderToggler::GamepadMonitor::buttonsToString(group.getGamepadShortcut()) : "";
+
+            if (!keyStr.empty() && !padStr.empty()) {
+                ImGui::Text(" %s (%s | [Pad] %s)", group.getName().c_str(), keyStr.c_str(), padStr.c_str());
+            } else if (!keyStr.empty()) {
+                ImGui::Text(" %s (%s)", group.getName().c_str(), keyStr.c_str());
+            } else if (!padStr.empty()) {
+                ImGui::Text(" %s ([Pad] %s)", group.getName().c_str(), padStr.c_str());
             } else {
                 ImGui::Text(" %s", group.getName().c_str());
             }
@@ -1454,6 +1573,22 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
                 uint32_t keys = group.getToggleKey();
                 if (key_input_box(ShaderToggler::reshade_key_name(keys).c_str(), &keys, runtime)) {
                     group.setToggleKey(keys);
+                }
+                ImGui::PopItemWidth();
+
+                // Gamepad shortcut of group
+                ImGui::PushItemWidth(ImGui::GetWindowWidth() * 0.5f);
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("Pad shortcut");
+                ImGui::SameLine(ImGui::GetWindowWidth() * 0.2f);
+
+                uint32_t gpShortcut = group.getGamepadShortcut();
+                if (gamepad_input_box("##PadShortcut", &gpShortcut)) {
+                    group.setGamepadShortcut(gpShortcut);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Clear##ClearPadGroup")) {
+                    group.setGamepadShortcut(0);
                 }
                 ImGui::PopItemWidth();
 
@@ -1557,6 +1692,7 @@ static void DisplaySettings(AddonImGui::AddonUIData& instance, reshade::api::eff
             copy.setId(ShaderToggler::ToggleGroup::getNewGroupId());
             copy.setName(group->getName() + " (copy)");
             copy.setToggleKey(0); // avoid two groups sharing the same hotkey
+            copy.setGamepadShortcut(0); // avoid two groups sharing the same controller shortcut
             copy.setEditing(false);
             instance.GetToggleGroups().emplace(copy.getId(), copy);
         }

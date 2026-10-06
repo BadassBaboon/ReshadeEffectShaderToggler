@@ -215,6 +215,7 @@
     <ClInclude Include="crc32_hash.hpp" />
     <ClInclude Include="DescriptorTracking.h" />
     <ClInclude Include="EffectData.h" />
+    <ClInclude Include="GamepadMonitor.h" />
     <ClInclude Include="GameHookT.h" />
     <ClInclude Include="KeyMonitor.h" />
     <ClInclude Include="GlobalResourceView.h" />
@@ -253,6 +254,7 @@
     <ClCompile Include="ConstantCopyMemcpy.cpp" />
     <ClCompile Include="ConstantManager.cpp" />
     <ClCompile Include="DescriptorTracking.cpp" />
+    <ClCompile Include="GamepadMonitor.cpp" />
     <ClCompile Include="GameHookT.cpp" />
     <ClCompile Include="GlobalResourceView.cpp" />
     <ClCompile Include="RenderingBindingManager.cpp" />

@@ -313,6 +313,12 @@ void AddonUIData::LoadShaderTogglerIniFile(const string& fileName)
         }
     }
 
+    uint32_t gpToggleAll = iniFile.GetUInt("GAMEPAD_TOGGLE_ALL", "Keybindings");
+    if (gpToggleAll != UINT_MAX)
+    {
+        _gamepadToggleAll = gpToggleAll;
+    }
+
     int groupCounter = 0;
     const int numberOfGroups = iniFile.GetInt("AmountGroups", "General");
     if (numberOfGroups == INT_MIN)
@@ -372,6 +378,7 @@ void AddonUIData::SaveShaderTogglerIniFile(const string& fileName)
     {
         uint32_t keybinding = iniFile.SetUInt(KeybindNames[i], _keyBindings[i], "", "Keybindings");
     }
+    iniFile.SetUInt("GAMEPAD_TOGGLE_ALL", _gamepadToggleAll, "", "Keybindings");
 
     iniFile.SetInt("AmountGroups", static_cast<int>(_toggleGroups.size()), "", "General");
 

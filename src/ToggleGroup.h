@@ -198,6 +198,8 @@ class ToggleGroup {
     void setFlipBufferBinding(bool flip) { _flipBufferBinding = flip; }
     bool getSuppressDrawCall() const { return _suppressDrawCall; }
     void setSuppressDrawCall(bool suppress) { _suppressDrawCall = suppress; }
+    uint32_t getGamepadShortcut() const { return _gamepadShortcut; }
+    void setGamepadShortcut(uint32_t shortcut) { _gamepadShortcut = shortcut; }
 
     bool getMatchVertexCount() const { return _matchVertexCount; }
     void setMatchVertexCount(bool match) { _matchVertexCount = match; }
@@ -327,6 +329,7 @@ class ToggleGroup {
     bool _matchInstanceCount = false;
     uint32_t _instanceCountMin = 0;
     uint32_t _instanceCountMax = 0;
+    uint32_t _gamepadShortcut = 0;
     uint32_t _matchSwapchainResolution = SWAPCHAIN_MATCH_MODE_RESOLUTION;
     uint32_t _bindingMatchSwapchainResolution = SWAPCHAIN_MATCH_MODE_RESOLUTION;
     bool _requeueAfterRTMatchingFailure;
