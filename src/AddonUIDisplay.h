@@ -1704,6 +1704,27 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
 
     ImGui::Spacing();
 
+    const uint32_t stageOffset = std::min<uint32_t>(huntingUI.selectedShaderType, 2) * 7;
+    const auto kbPrev = static_cast<AddonImGui::Keybind>(stageOffset + AddonImGui::PIXEL_SHADER_DOWN);
+    const auto kbNext = static_cast<AddonImGui::Keybind>(stageOffset + AddonImGui::PIXEL_SHADER_UP);
+    const auto kbMark = static_cast<AddonImGui::Keybind>(stageOffset + AddonImGui::PIXEL_SHADER_MARK);
+    const auto kbPrevMarked = static_cast<AddonImGui::Keybind>(stageOffset + AddonImGui::PIXEL_SHADER_MARKED_DOWN);
+    const auto kbNextMarked = static_cast<AddonImGui::Keybind>(stageOffset + AddonImGui::PIXEL_SHADER_MARKED_UP);
+
+    auto showNavTooltip = [&](const char* description, AddonImGui::Keybind kb) {
+        if (!ImGui::IsItemHovered())
+            return;
+        const uint32_t key = instance.GetKeybinding(kb);
+        if (key != 0) {
+            const std::string keyName = ShaderToggler::reshade_key_name(key);
+            if (!keyName.empty()) {
+                ImGui::SetTooltip("%s\nShortcut: %s", description, keyName.c_str());
+                return;
+            }
+        }
+        ImGui::SetTooltip("%s\nShortcut: None (assign in Keybindings tab)", description);
+    };
+
     // Bottom Navigation Row 1: Previous / Next
     if (ImGui::BeginTable("ShaderHuntNavPrimary", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoBordersInBody)) {
         ImGui::TableNextColumn();
@@ -1711,14 +1732,14 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
             shaderManager->huntPreviousShader(false);
             navigationChanged = true;
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select previous collected shader");
+        showNavTooltip("Select previous collected shader", kbPrev);
 
         ImGui::TableNextColumn();
         if (repeatButton("Next >")) {
             shaderManager->huntNextShader(false);
             navigationChanged = true;
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select next collected shader");
+        showNavTooltip("Select next collected shader", kbNext);
 
         ImGui::EndTable();
     }
@@ -1730,14 +1751,14 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
             shaderManager->huntPreviousShader(true);
             navigationChanged = true;
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select previous marked shader");
+        showNavTooltip("Select previous marked shader", kbPrevMarked);
 
         ImGui::TableNextColumn();
         if (repeatButton("Next Marked >")) {
             shaderManager->huntNextShader(true);
             navigationChanged = true;
         }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select next marked shader");
+        showNavTooltip("Select next marked shader", kbNextMarked);
 
         ImGui::EndTable();
     }
@@ -1747,7 +1768,20 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
         shaderManager->toggleMarkOnHuntedShader();
         navigationChanged = true;
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle mark on active shader (or double-click hash in list / press Enter)");
+    if (ImGui::IsItemHovered()) {
+        const uint32_t key = instance.GetKeybinding(kbMark);
+        const uint32_t keyPrev = instance.GetKeybinding(static_cast<AddonImGui::Keybind>(stageOffset + AddonImGui::PIXEL_SHADER_MARK_PREV));
+        const uint32_t keyNext = instance.GetKeybinding(static_cast<AddonImGui::Keybind>(stageOffset + AddonImGui::PIXEL_SHADER_MARK_NEXT));
+
+        std::string shortcutStr = (key != 0) ? ShaderToggler::reshade_key_name(key) : "None (assign in Keybindings tab)";
+        std::string extraStr = "";
+        if (keyPrev != 0)
+            extraStr += "\nMark + Prev: " + ShaderToggler::reshade_key_name(keyPrev);
+        if (keyNext != 0)
+            extraStr += "\nMark + Next: " + ShaderToggler::reshade_key_name(keyNext);
+
+        ImGui::SetTooltip("Toggle mark on active shader (or double-click hash in list / press Enter)\nShortcut: %s%s", shortcutStr.c_str(), extraStr.c_str());
+    }
 
     // Bottom Actions Row 4: Copy Hash | Clear Marked (2 equal columns with plenty of width)
     if (ImGui::BeginTable("ShaderHuntActionsSecondary", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoBordersInBody)) {
