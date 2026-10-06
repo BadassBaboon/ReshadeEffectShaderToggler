@@ -28,49 +28,57 @@ static const std::unordered_set<std::string> varExclusionSet({ "frametime",
 
 static void DisplayConstantSettings(ShaderToggler::ToggleGroup* group) {
     ImGui::TableNextColumn();
-    ImGui::Text("Slot");
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Slot");
     ImGui::TableNextColumn();
-    ImGui::Text("%u", group->getCBSlotIndex());
-
-    ImGui::SameLine();
-
-    ImGui::PushID(0);
-    if (ImGui::SmallButton("+")) {
-        group->setCBSlotIndex(group->getCBSlotIndex() + 1);
-    }
-    ImGui::PopID();
-
-    if (group->getCBSlotIndex() != 0) {
+    {
+        const float btnW = ImGui::GetFrameHeight();
+        const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+        if (ImGui::GetContentRegionAvail().x > totalW)
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("%u", group->getCBSlotIndex());
         ImGui::SameLine();
-
-        if (ImGui::SmallButton("-")) {
+        ImGui::PushID(0);
+        if (ImGui::Button("+##cb_slot_inc", ImVec2(btnW, 0))) {
+            group->setCBSlotIndex(group->getCBSlotIndex() + 1);
+        }
+        ImGui::PopID();
+        ImGui::SameLine();
+        if (group->getCBSlotIndex() == 0) ImGui::BeginDisabled();
+        if (ImGui::Button("-##cb_slot_dec", ImVec2(btnW, 0))) {
             group->setCBSlotIndex(group->getCBSlotIndex() - 1);
         }
+        if (group->getCBSlotIndex() == 0) ImGui::EndDisabled();
     }
 
     ImGui::TableNextRow();
 
     ImGui::TableNextColumn();
-    ImGui::Text("Binding");
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Binding");
     ImGui::TableNextColumn();
-    ImGui::Text("%u", group->getCBDescriptorIndex());
-
-    ImGui::SameLine();
-
-    ImGui::PushID(2);
-    if (ImGui::SmallButton("+")) {
-        group->dispatchCBCycle(ShaderToggler::CYCLE_UP);
-    }
-    ImGui::PopID();
-
-    if (group->getCBDescriptorIndex() != 0) {
+    {
+        const float btnW = ImGui::GetFrameHeight();
+        const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+        if (ImGui::GetContentRegionAvail().x > totalW)
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("%u", group->getCBDescriptorIndex());
         ImGui::SameLine();
-
+        ImGui::PushID(2);
+        if (ImGui::Button("+##cb_desc_inc", ImVec2(btnW, 0))) {
+            group->dispatchCBCycle(ShaderToggler::CYCLE_UP);
+        }
+        ImGui::PopID();
+        ImGui::SameLine();
+        if (group->getCBDescriptorIndex() == 0) ImGui::BeginDisabled();
         ImGui::PushID(1);
-        if (ImGui::SmallButton("-")) {
+        if (ImGui::Button("-##cb_desc_dec", ImVec2(btnW, 0))) {
             group->dispatchCBCycle(ShaderToggler::CYCLE_DOWN);
         }
         ImGui::PopID();
+        if (group->getCBDescriptorIndex() == 0) ImGui::EndDisabled();
     }
 }
 
@@ -112,13 +120,16 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
             ImGui::BeginDisabled();
         }
 
+        const float labelColWidth = std::max(200.0f, ImGui::CalcTextSize("Extract constant buffer   ").x);
         if (ImGui::BeginTable("ConstantBufferSettings", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
-            ImGui::TableSetupColumn("##CBcolumnsetup", ImGuiTableColumnFlags_WidthFixed, ImGui::GetWindowWidth() / 3);
+            ImGui::TableSetupColumn("##CBcolumnsetup", ImGuiTableColumnFlags_WidthFixed, labelColWidth);
+            ImGui::TableSetupColumn("##CBcontrols", ImGuiTableColumnFlags_WidthStretch);
 
             ImGui::TableNextColumn();
-            ImGui::Text("Extract constant buffer");
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Extract constant buffer");
             ImGui::TableNextColumn();
-            ImGui::Checkbox("##Extractconstantbuffer", &extractionEnabled);
+            DrawTableToggleSwitch("##Extractconstantbuffer", &extractionEnabled);
 
             if (!extractionEnabled) {
                 instance.GetConstantHandler()->RemoveGroup(group, dev);
@@ -128,8 +139,10 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
             ImGui::TableNextRow();
 
             ImGui::TableNextColumn();
-            ImGui::Text("View mode");
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("View mode");
             ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
             if (ImGui::BeginCombo("##Viewmode", typeSelectedItem, ImGuiComboFlags_None)) {
                 for (int n = 0; n < IM_ARRAYSIZE(typeItems); n++) {
                     bool is_selected = (typeSelectedItem == typeItems[n]);
@@ -146,8 +159,10 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
             ImGui::TableNextRow();
 
             ImGui::TableNextColumn();
-            ImGui::Text("Shader Stage");
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Shader Stage");
             ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
             if (ImGui::BeginCombo("##ShaderStage", selectedStage, ImGuiComboFlags_None)) {
                 for (int n = 0; n < IM_ARRAYSIZE(stageItems); n++) {
                     bool is_selected = (selectedStage == stageItems[n]);
@@ -164,8 +179,10 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
             ImGui::TableNextRow();
 
             ImGui::TableNextColumn();
-            ImGui::Text("Constant mode");
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Constant mode");
             ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
             if (ImGui::BeginCombo("##CBmode", cbModeSelection, ImGuiComboFlags_None)) {
                 for (int n = 0; n < IM_ARRAYSIZE(cbModeItems); n++) {
                     bool is_selected = (cbModeSelection == cbModeItems[n]);

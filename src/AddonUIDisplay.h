@@ -31,7 +31,6 @@
 /////////////////////////////////////////////////////////////////////////
 
 #pragma once
-#include "AddonUIConstants.h"
 #include "ConstantManager.h"
 #include "GamepadMonitor.h"
 #include "KeyData.h"
@@ -164,7 +163,17 @@ static bool DrawToggleSwitch(const char* id, bool* v) {
     return clicked;
 }
 
-static bool DrawToggleRow(const char* label, bool* v, const char* tooltip = nullptr, const char* subtext = nullptr) {
+static bool DrawTableToggleSwitch(const char* id, bool* v) {
+    float avail = ImGui::GetContentRegionAvail().x;
+    float height = ImGui::GetFrameHeight() * 0.70f;
+    float switch_w = height * 1.85f;
+    if (avail > switch_w) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - switch_w);
+    }
+    return DrawToggleSwitch(id, v);
+}
+
+static bool DrawToggleRow(const char* label, bool* v, const char* tooltip = nullptr, const char* subtext = nullptr, float rightPad = RFX_CARD_PAD) {
     ImGui::PushID(label);
     ImGui::BeginGroup();
     ImGui::TextUnformatted(label);
@@ -177,7 +186,7 @@ static bool DrawToggleRow(const char* label, bool* v, const char* tooltip = null
 
     float avail = ImGui::GetContentRegionAvail().x;
     float switch_w = ImGui::GetFrameHeight() * 0.70f * 1.85f;
-    float switch_x = ImGui::GetCursorPosX() + avail - switch_w - RFX_CARD_PAD;
+    float switch_x = ImGui::GetCursorPosX() + avail - switch_w - rightPad;
     if (switch_x > ImGui::GetCursorPosX()) {
         ImGui::SameLine(switch_x);
     } else {
@@ -189,6 +198,8 @@ static bool DrawToggleRow(const char* label, bool* v, const char* tooltip = null
     ImGui::Spacing();
     return changed;
 }
+
+#include "AddonUIConstants.h"
 
 enum RestCategory {
     CAT_GROUPS = 0,
@@ -394,28 +405,32 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
         availableCount = runtimeData.techniqueUiCache.size();
     }
 
+    const float labelColWidth = std::max(200.0f, ImGui::CalcTextSize("Except for selected techniques   ").x);
     if (ImGui::BeginTable("Technique selection##options", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
-        ImGui::TableSetupColumn("##columnsetup", ImGuiTableColumnFlags_WidthFixed, tblWidth);
+        ImGui::TableSetupColumn("##columnsetup", ImGuiTableColumnFlags_WidthFixed, labelColWidth);
+        ImGui::TableSetupColumn("##columncontrols", ImGuiTableColumnFlags_WidthStretch);
 
         ImGui::TableNextColumn();
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("Apply all enabled techniques");
+        ImGui::TextUnformatted("Apply all enabled techniques");
         ImGui::TableNextColumn();
-        DrawToggleSwitch("##Catchalltechniques", &allowAll);
+        DrawTableToggleSwitch("##Catchalltechniques", &allowAll);
 
         ImGui::TableNextRow();
         if (allowAll) {
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Except for selected techniques");
+            ImGui::TextUnformatted("Except for selected techniques");
             ImGui::TableNextColumn();
-            DrawToggleSwitch("##Exceptfor", &exceptions);
+            DrawTableToggleSwitch("##Exceptfor", &exceptions);
             ImGui::TableNextRow();
         }
 
         ImGui::TableNextColumn();
-        ImGui::Text("Mode");
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Mode");
         ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
         if (!allowAll)
             ImGui::TextUnformatted("Only ticked enabled techniques are applied");
         else if (exceptions)
@@ -425,8 +440,10 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
 
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        ImGui::Text("Search");
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Search");
         ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-1.0f);
         ImGui::InputText("##techniqueSearch", searchBuf, IM_ARRAYSIZE(searchBuf));
 
         ImGui::TableNextRow();
@@ -437,6 +454,7 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
             selectionChanged = true;
         }
         ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
         ImGui::Text("%zu selected / %zu available", group->preferredTechniques().size(), availableCount);
         ImGui::EndTable();
     }
@@ -531,8 +549,14 @@ static void DisplayPreview(AddonImGui::AddonUIData& instance,
         const bool vulkan = runtime->get_device()->get_api() == reshade::api::device_api::vulkan;
 
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("Clear alpha channel");
-        ImGui::SameLine();
+        ImGui::TextUnformatted("Clear alpha channel");
+        const float switch_w = ImGui::GetFrameHeight() * 0.70f * 1.85f;
+        const float avail = ImGui::GetContentRegionAvail().x;
+        if (avail > switch_w) {
+            ImGui::SameLine(ImGui::GetCursorPosX() + avail - switch_w);
+        } else {
+            ImGui::SameLine();
+        }
         if (vulkan)
             ImGui::BeginDisabled();
         DrawToggleSwitch("##Clearalpha", &clearAlpha);
@@ -669,20 +693,21 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
     if (ImGui::BeginChild("RenderTargets", { 0, height / 1.5f }, true, ImGuiChildFlags_AlwaysAutoResize)) {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
 
+        const float labelColWidth = std::max(220.0f, ImGui::CalcTextSize("Preserve target alpha channel   ").x);
         if (ImGui::BeginTable("RenderTargetsSettings", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
-            ImGui::TableSetupColumn("##RTcolumnsetup", ImGuiTableColumnFlags_WidthFixed, ImGui::GetWindowWidth() / 3);
+            ImGui::TableSetupColumn("##RTcolumnsetup", ImGuiTableColumnFlags_WidthFixed, labelColWidth);
+            ImGui::TableSetupColumn("##RTcontrols", ImGuiTableColumnFlags_WidthStretch);
 
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Auto scene colour");
+            ImGui::TextUnformatted("Auto scene colour");
             ImGui::TableNextColumn();
             if (!autoSceneColourSupported)
                 ImGui::BeginDisabled();
-            DrawToggleSwitch("##AutoSceneColour", &autoSceneColour);
+            DrawTableToggleSwitch("##AutoSceneColour", &autoSceneColour);
             if (!autoSceneColourSupported)
                 ImGui::EndDisabled();
             if (!autoSceneColourSupported) {
-                ImGui::SameLine();
                 ImGui::TextDisabled("(D3D10/D3D11/D3D12/Vulkan only)");
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -787,8 +812,12 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Diagnostics");
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("Diagnostics");
                 ImGui::TableNextColumn();
+                const float copyBtnW = ImGui::CalcTextSize("Copy diagnostics").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+                if (ImGui::GetContentRegionAvail().x > copyBtnW)
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - copyBtnW);
                 if (ImGui::Button("Copy diagnostics")) {
                     const char* apiName = deviceApi == reshade::api::device_api::d3d10 ? "D3D10" :
                                           deviceApi == reshade::api::device_api::d3d11 ? "D3D11" :
@@ -869,8 +898,10 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
             } else {
                 if (supportsSRVwrite) {
                     ImGui::TableNextColumn();
-                    ImGui::Text("Render destination");
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Render destination");
                     ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
                     if (ImGui::BeginCombo("##Renderdestination", typeSelectedDestItem, ImGuiComboFlags_None)) {
                         for (int n = 0; n < IM_ARRAYSIZE(typeDestItems); n++) {
                             const bool is_selected = (typeSelectedDestItem == typeDestItems[n]);
@@ -897,8 +928,10 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
                     }
 
                     ImGui::TableNextColumn();
-                    ImGui::Text("Shader Stage");
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Shader Stage");
                     ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
                     if (ImGui::BeginCombo("##RenderShaderStage", selectedStage, ImGuiComboFlags_None)) {
                         for (int n = 0; n < IM_ARRAYSIZE(stageItems); n++) {
                             const bool is_selected = (selectedStage == stageItems[n]);
@@ -915,36 +948,52 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
 
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
-                    ImGui::Text("Slot");
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Slot");
                     ImGui::TableNextColumn();
-                    ImGui::Text("%u", group->getRenderSRVSlotIndex());
-                    ImGui::SameLine();
-                    ImGui::PushID(0);
-                    if (ImGui::SmallButton("+"))
-                        group->setRenderSRVSlotIndex(group->getRenderSRVSlotIndex() + 1);
-                    ImGui::PopID();
-                    if (group->getRenderSRVSlotIndex() != 0) {
+                    {
+                        const float btnW = ImGui::GetFrameHeight();
+                        const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+                        if (ImGui::GetContentRegionAvail().x > totalW)
+                            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("%u", group->getRenderSRVSlotIndex());
                         ImGui::SameLine();
-                        if (ImGui::SmallButton("-"))
+                        ImGui::PushID(0);
+                        if (ImGui::Button("+##srv_slot_inc", ImVec2(btnW, 0)))
+                            group->setRenderSRVSlotIndex(group->getRenderSRVSlotIndex() + 1);
+                        ImGui::PopID();
+                        ImGui::SameLine();
+                        if (group->getRenderSRVSlotIndex() == 0) ImGui::BeginDisabled();
+                        if (ImGui::Button("-##srv_slot_dec", ImVec2(btnW, 0)))
                             group->setRenderSRVSlotIndex(group->getRenderSRVSlotIndex() - 1);
+                        if (group->getRenderSRVSlotIndex() == 0) ImGui::EndDisabled();
                     }
 
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
-                    ImGui::Text("Binding");
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Binding");
                     ImGui::TableNextColumn();
-                    ImGui::Text("%u", group->getRenderSRVDescriptorIndex());
-                    ImGui::SameLine();
-                    ImGui::PushID(2);
-                    if (ImGui::SmallButton("+"))
-                        group->setRenderSRVDescriptorIndex(group->getRenderSRVDescriptorIndex() + 1);
-                    ImGui::PopID();
-                    if (group->getRenderSRVDescriptorIndex() != 0) {
+                    {
+                        const float btnW = ImGui::GetFrameHeight();
+                        const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+                        if (ImGui::GetContentRegionAvail().x > totalW)
+                            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("%u", group->getRenderSRVDescriptorIndex());
                         ImGui::SameLine();
+                        ImGui::PushID(2);
+                        if (ImGui::Button("+##srv_bind_inc", ImVec2(btnW, 0)))
+                            group->setRenderSRVDescriptorIndex(group->getRenderSRVDescriptorIndex() + 1);
+                        ImGui::PopID();
+                        ImGui::SameLine();
+                        if (group->getRenderSRVDescriptorIndex() == 0) ImGui::BeginDisabled();
                         ImGui::PushID(1);
-                        if (ImGui::SmallButton("-"))
+                        if (ImGui::Button("-##srv_bind_dec", ImVec2(btnW, 0)))
                             group->setRenderSRVDescriptorIndex(group->getRenderSRVDescriptorIndex() - 1);
                         ImGui::PopID();
+                        if (group->getRenderSRVDescriptorIndex() == 0) ImGui::EndDisabled();
                     }
 
                     if (!instance.GetTrackDescriptors())
@@ -953,22 +1002,32 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
                     group->setRenderToResourceViews(false);
 
                     ImGui::TableNextColumn();
-                    ImGui::Text("Render target index");
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Render target index");
                     ImGui::TableNextColumn();
-                    ImGui::Text("%u", group->getRenderTargetIndex());
-                    ImGui::SameLine();
-                    if (ImGui::SmallButton("+"))
-                        group->setRenderTargetIndex(group->getRenderTargetIndex() + 1);
-                    if (group->getRenderTargetIndex() != 0) {
+                    {
+                        const float btnW = ImGui::GetFrameHeight();
+                        const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+                        if (ImGui::GetContentRegionAvail().x > totalW)
+                            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("%u", group->getRenderTargetIndex());
                         ImGui::SameLine();
-                        if (ImGui::SmallButton("-"))
+                        if (ImGui::Button("+##rt_idx_inc", ImVec2(btnW, 0)))
+                            group->setRenderTargetIndex(group->getRenderTargetIndex() + 1);
+                        ImGui::SameLine();
+                        if (group->getRenderTargetIndex() == 0) ImGui::BeginDisabled();
+                        if (ImGui::Button("-##rt_idx_dec", ImVec2(btnW, 0)))
                             group->setRenderTargetIndex(group->getRenderTargetIndex() - 1);
+                        if (group->getRenderTargetIndex() == 0) ImGui::EndDisabled();
                     }
 
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
-                    ImGui::Text("Invocation location");
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Invocation location");
                     ImGui::TableNextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
                     if (ImGui::BeginCombo("##Invocationlocation", typeSelectedItem, ImGuiComboFlags_None)) {
                         for (int n = 0; n < IM_ARRAYSIZE(invocationDescription); n++) {
                             const bool is_selected = (typeSelectedItem == invocationDescription[n]);
@@ -987,82 +1046,90 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Retry RT assignment");
+            ImGui::TextUnformatted("Retry RT assignment");
             ImGui::TableNextColumn();
-            DrawToggleSwitch("##RetryRTassignment", &retry);
+            DrawTableToggleSwitch("##RetryRTassignment", &retry);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Apply tone map clamping");
+            ImGui::TextUnformatted("Apply tone map clamping");
             ImGui::TableNextColumn();
-            DrawToggleSwitch("##tonemap", &tonemap);
+            DrawTableToggleSwitch("##tonemap", &tonemap);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Flip render target");
+            ImGui::TextUnformatted("Flip render target");
             ImGui::TableNextColumn();
-            DrawToggleSwitch("##flipbuffer", &flipbuffer);
+            DrawTableToggleSwitch("##flipbuffer", &flipbuffer);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Preserve target alpha channel");
+            ImGui::TextUnformatted("Preserve target alpha channel");
             ImGui::TableNextColumn();
             if (autoSceneColourActive)
                 ImGui::BeginDisabled();
-            DrawToggleSwitch("##preserveAlpha", &preserveAlpha);
+            DrawTableToggleSwitch("##preserveAlpha", &preserveAlpha);
             if (autoSceneColourActive) {
                 ImGui::EndDisabled();
-                ImGui::SameLine();
-                ImGui::TextDisabled("ignored while Auto scene colour is active");
+                ImGui::TextDisabled("(ignored while Auto scene colour is active)");
             }
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Match swapchain");
+            ImGui::TextUnformatted("Match swapchain");
             ImGui::TableNextColumn();
             if (autoSceneColourActive) {
+                ImGui::AlignTextToFramePadding();
                 ImGui::TextUnformatted("ASPECT RATIO (automatic)");
-            } else if (ImGui::BeginCombo("##effSwapChainMatchMode", typesSelectedSwapchainMatchMode, ImGuiComboFlags_None)) {
-                for (int n = 0; n < IM_ARRAYSIZE(swapchainMatchOptions); n++) {
-                    const bool is_selected = (typesSelectedSwapchainMatchMode == swapchainMatchOptions[n]);
-                    if (ImGui::Selectable(swapchainMatchOptions[n], is_selected)) {
-                        typesSelectedSwapchainMatchMode = swapchainMatchOptions[n];
-                        selectedSwapchainMatchMode = n;
+            } else {
+                ImGui::SetNextItemWidth(-1.0f);
+                if (ImGui::BeginCombo("##effSwapChainMatchMode", typesSelectedSwapchainMatchMode, ImGuiComboFlags_None)) {
+                    for (int n = 0; n < IM_ARRAYSIZE(swapchainMatchOptions); n++) {
+                        const bool is_selected = (typesSelectedSwapchainMatchMode == swapchainMatchOptions[n]);
+                        if (ImGui::Selectable(swapchainMatchOptions[n], is_selected)) {
+                            typesSelectedSwapchainMatchMode = swapchainMatchOptions[n];
+                            selectedSwapchainMatchMode = n;
+                        }
+                        if (is_selected)
+                            ImGui::SetItemDefaultFocus();
                     }
-                    if (is_selected)
-                        ImGui::SetItemDefaultFocus();
+                    ImGui::EndCombo();
                 }
-                ImGui::EndCombo();
             }
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Suppress draw calls");
+            ImGui::TextUnformatted("Suppress draw calls");
             ImGui::TableNextColumn();
-            DrawToggleSwitch("##SuppressDrawCall", &suppressDraw);
+            DrawTableToggleSwitch("##SuppressDrawCall", &suppressDraw);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Filter by index count");
+            ImGui::TextUnformatted("Filter by index count");
             ImGui::TableNextColumn();
             bool matchIdx = group->getMatchIndexCount();
-            if (DrawToggleSwitch("##MatchIdx", &matchIdx)) {
+            if (DrawTableToggleSwitch("##MatchIdx", &matchIdx)) {
                 group->setMatchIndexCount(matchIdx);
             }
             if (matchIdx) {
-                ImGui::SameLine();
                 int idxMin = static_cast<int>(group->getIndexCountMin());
                 int idxMax = static_cast<int>(group->getIndexCountMax());
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("Min:");
+                ImGui::SameLine();
                 ImGui::SetNextItemWidth(70.0f);
                 if (ImGui::InputInt("Min##Idx", &idxMin, 0)) {
                     group->setIndexCountMin(std::max(0, idxMin));
                 }
+                ImGui::SameLine();
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("Max:");
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(70.0f);
                 if (ImGui::InputInt("Max##Idx", &idxMax, 0)) {
@@ -1073,20 +1140,25 @@ static void DisplayRenderTargets(AddonImGui::AddonUIData& instance,
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Filter by vertex count");
+            ImGui::TextUnformatted("Filter by vertex count");
             ImGui::TableNextColumn();
             bool matchVtx = group->getMatchVertexCount();
-            if (DrawToggleSwitch("##MatchVtx", &matchVtx)) {
+            if (DrawTableToggleSwitch("##MatchVtx", &matchVtx)) {
                 group->setMatchVertexCount(matchVtx);
             }
             if (matchVtx) {
-                ImGui::SameLine();
                 int vtxMin = static_cast<int>(group->getVertexCountMin());
                 int vtxMax = static_cast<int>(group->getVertexCountMax());
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("Min:");
+                ImGui::SameLine();
                 ImGui::SetNextItemWidth(70.0f);
                 if (ImGui::InputInt("Min##Vtx", &vtxMin, 0)) {
                     group->setVertexCountMin(std::max(0, vtxMin));
                 }
+                ImGui::SameLine();
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("Max:");
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(70.0f);
                 if (ImGui::InputInt("Max##Vtx", &vtxMax, 0)) {
@@ -1156,14 +1228,16 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
         bool clearBinding = group->getClearBindings();
         bool flipBinding = group->getFlipBufferBinding();
 
+        const float labelColWidth = std::max(220.0f, ImGui::CalcTextSize("Create texture copy for binding   ").x);
         if (ImGui::BeginTable("Bindingsettings", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
-            ImGui::TableSetupColumn("##BindingColumnSetup", ImGuiTableColumnFlags_WidthFixed, ImGui::GetWindowWidth() / 3);
+            ImGui::TableSetupColumn("##BindingColumnSetup", ImGuiTableColumnFlags_WidthFixed, labelColWidth);
+            ImGui::TableSetupColumn("##BindingControls", ImGuiTableColumnFlags_WidthStretch);
 
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Texture binding enabled");
+            ImGui::TextUnformatted("Texture binding enabled");
             ImGui::TableNextColumn();
-            DrawToggleSwitch("##Texturebindingenabled", &isBindingEnabled);
+            DrawTableToggleSwitch("##Texturebindingenabled", &isBindingEnabled);
 
             if (!isBindingEnabled) {
                 ImGui::BeginDisabled();
@@ -1176,16 +1250,18 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
 
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Texture semantic");
+            ImGui::TextUnformatted("Texture semantic");
             ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
             ImGui::InputText("##BindingName", tmpBuffer, 149);
 
             ImGui::TableNextRow();
 
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Texture source");
+            ImGui::TextUnformatted("Texture source");
             ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1.0f);
             if (ImGui::BeginCombo("##Bindingsource", typeSelectedItem, ImGuiComboFlags_None)) {
                 for (int n = 0; n < IM_ARRAYSIZE(typeItems); n++) {
                     bool is_selected = (typeSelectedItem == typeItems[n]);
@@ -1203,27 +1279,27 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
 
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Create texture copy for binding");
+            ImGui::TextUnformatted("Create texture copy for binding");
             ImGui::TableNextColumn();
-            DrawToggleSwitch("##Copybinding", &copyBinding);
+            DrawTableToggleSwitch("##Copybinding", &copyBinding);
 
             ImGui::TableNextRow();
 
             ImGui::BeginDisabled(!copyBinding);
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Flip binding texture");
+            ImGui::TextUnformatted("Flip binding texture");
             ImGui::TableNextColumn();
-            DrawToggleSwitch("##flipbinding", &flipBinding);
+            DrawTableToggleSwitch("##flipbinding", &flipBinding);
             ImGui::EndDisabled();
 
             ImGui::TableNextRow();
 
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("Clear binding on hash miss");
+            ImGui::TextUnformatted("Clear binding on hash miss");
             ImGui::TableNextColumn();
-            DrawToggleSwitch("##Clearbinding", &clearBinding);
+            DrawTableToggleSwitch("##Clearbinding", &clearBinding);
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
@@ -1238,8 +1314,10 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
 
         ImGui::Separator();
 
+        const float srcLabelColWidth = std::max(220.0f, ImGui::CalcTextSize("Render target index   ").x);
         if (ImGui::BeginTable("BindingSourcesettings", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
-            ImGui::TableSetupColumn("##BindingSourceColumnSetup", ImGuiTableColumnFlags_WidthFixed, ImGui::GetWindowWidth() / 3);
+            ImGui::TableSetupColumn("##BindingSourceColumnSetup", ImGuiTableColumnFlags_WidthFixed, srcLabelColWidth);
+            ImGui::TableSetupColumn("##BindingSourceControls", ImGuiTableColumnFlags_WidthStretch);
 
             if (selectedIndex == 1) {
                 if (!instance.GetTrackDescriptors()) {
@@ -1250,8 +1328,10 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
                 }
 
                 ImGui::TableNextColumn();
-                ImGui::Text("Shader Stage");
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("Shader Stage");
                 ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-1.0f);
                 if (ImGui::BeginCombo("##ShaderStage", selectedStage, ImGuiComboFlags_None)) {
                     for (int n = 0; n < IM_ARRAYSIZE(stageItems); n++) {
                         bool is_selected = (selectedStage == stageItems[n]);
@@ -1269,43 +1349,57 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
                 ImGui::TableNextRow();
 
                 ImGui::TableNextColumn();
-                ImGui::Text("Slot");
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("Slot");
                 ImGui::TableNextColumn();
-                ImGui::Text("%u", group->getBindingSRVSlotIndex());
-                ImGui::SameLine();
-                ImGui::PushID(0);
-                if (ImGui::SmallButton("+")) {
-                    group->setBindingSRVSlotIndex(group->getBindingSRVSlotIndex() + 1);
-                }
-                ImGui::PopID();
-
-                if (group->getBindingSRVSlotIndex() != 0) {
+                {
+                    const float btnW = ImGui::GetFrameHeight();
+                    const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+                    if (ImGui::GetContentRegionAvail().x > totalW)
+                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::Text("%u", group->getBindingSRVSlotIndex());
                     ImGui::SameLine();
-                    if (ImGui::SmallButton("-")) {
+                    ImGui::PushID(0);
+                    if (ImGui::Button("+##bind_srv_slot_inc", ImVec2(btnW, 0))) {
+                        group->setBindingSRVSlotIndex(group->getBindingSRVSlotIndex() + 1);
+                    }
+                    ImGui::PopID();
+                    ImGui::SameLine();
+                    if (group->getBindingSRVSlotIndex() == 0) ImGui::BeginDisabled();
+                    if (ImGui::Button("-##bind_srv_slot_dec", ImVec2(btnW, 0))) {
                         group->setBindingSRVSlotIndex(group->getBindingSRVSlotIndex() - 1);
                     }
+                    if (group->getBindingSRVSlotIndex() == 0) ImGui::EndDisabled();
                 }
 
                 ImGui::TableNextRow();
 
                 ImGui::TableNextColumn();
-                ImGui::Text("Binding");
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("Binding");
                 ImGui::TableNextColumn();
-                ImGui::Text("%u", group->getBindingSRVDescriptorIndex());
-                ImGui::SameLine();
-                ImGui::PushID(2);
-                if (ImGui::SmallButton("+")) {
-                    group->dispatchSRVCycle(ShaderToggler::CYCLE_UP);
-                }
-                ImGui::PopID();
-
-                if (group->getBindingSRVDescriptorIndex() != 0) {
+                {
+                    const float btnW = ImGui::GetFrameHeight();
+                    const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+                    if (ImGui::GetContentRegionAvail().x > totalW)
+                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::Text("%u", group->getBindingSRVDescriptorIndex());
                     ImGui::SameLine();
+                    ImGui::PushID(2);
+                    if (ImGui::Button("+##bind_srv_desc_inc", ImVec2(btnW, 0))) {
+                        group->dispatchSRVCycle(ShaderToggler::CYCLE_UP);
+                    }
+                    ImGui::PopID();
+                    ImGui::SameLine();
+                    if (group->getBindingSRVDescriptorIndex() == 0) ImGui::BeginDisabled();
                     ImGui::PushID(1);
-                    if (ImGui::SmallButton("-")) {
+                    if (ImGui::Button("-##bind_srv_desc_dec", ImVec2(btnW, 0))) {
                         group->dispatchSRVCycle(ShaderToggler::CYCLE_DOWN);
                     }
                     ImGui::PopID();
+                    if (group->getBindingSRVDescriptorIndex() == 0) ImGui::EndDisabled();
                 }
 
                 if (!instance.GetTrackDescriptors()) {
@@ -1318,22 +1412,28 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
                 uint32_t rtSelectedIndex = group->getBindingInvocationLocation();
 
                 ImGui::TableNextColumn();
-                ImGui::Text("Render target index");
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("Render target index");
                 ImGui::TableNextColumn();
-                ImGui::Text("%u", group->getBindingRenderTargetIndex());
-                ImGui::SameLine();
-
-                ImGui::PushID(0);
-                if (ImGui::SmallButton("+")) {
-                    group->setBindingRenderTargetIndex(group->getBindingRenderTargetIndex() + 1);
-                }
-                ImGui::PopID();
-
-                if (group->getBindingRenderTargetIndex() != 0) {
+                {
+                    const float btnW = ImGui::GetFrameHeight();
+                    const float totalW = 40.0f + btnW * 2.0f + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+                    if (ImGui::GetContentRegionAvail().x > totalW)
+                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - totalW);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::Text("%u", group->getBindingRenderTargetIndex());
                     ImGui::SameLine();
-                    if (ImGui::SmallButton("-")) {
+                    ImGui::PushID(0);
+                    if (ImGui::Button("+##bind_rt_idx_inc", ImVec2(btnW, 0))) {
+                        group->setBindingRenderTargetIndex(group->getBindingRenderTargetIndex() + 1);
+                    }
+                    ImGui::PopID();
+                    ImGui::SameLine();
+                    if (group->getBindingRenderTargetIndex() == 0) ImGui::BeginDisabled();
+                    if (ImGui::Button("-##bind_rt_idx_dec", ImVec2(btnW, 0))) {
                         group->setBindingRenderTargetIndex(group->getBindingRenderTargetIndex() - 1);
                     }
+                    if (group->getBindingRenderTargetIndex() == 0) ImGui::EndDisabled();
                 }
 
                 ImGui::TableNextRow();
@@ -1343,8 +1443,10 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
                 }
 
                 ImGui::TableNextColumn();
-                ImGui::Text("Invocation location");
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("Invocation location");
                 ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-1.0f);
                 if (ImGui::BeginCombo("##Invocationlocation", rtTypeSelectedItem, ImGuiComboFlags_None)) {
                     for (int n = 0; n < IM_ARRAYSIZE(invocationDescription); n++) {
                         bool is_selected = (rtTypeSelectedItem == invocationDescription[n]);
@@ -1362,9 +1464,12 @@ static void DisplayTextureBindings(AddonImGui::AddonUIData& instance,
                     ImGui::EndDisabled();
                 }
 
+                ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Match swapchain");
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("Match swapchain");
                 ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-1.0f);
                 if (ImGui::BeginCombo("##swapChainMatchMode", typesSelectedSwapchainMatchMode, ImGuiComboFlags_None)) {
                     for (int n = 0; n < IM_ARRAYSIZE(swapchainMatchOptions); n++) {
                         bool is_selected = (typesSelectedSwapchainMatchMode == swapchainMatchOptions[n]);
@@ -1521,7 +1626,7 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
     for (const uint32_t hash : missingMarkedHashes)
         addIfVisible(hash, false);
 
-    const float bottomControlsHeight = ImGui::GetFrameHeightWithSpacing() * 3.0f + ImGui::GetStyle().ItemSpacing.y * 2.0f + 6.0f;
+    const float bottomControlsHeight = ImGui::GetFrameHeightWithSpacing() * 4.0f + ImGui::GetStyle().ItemSpacing.y * 3.0f + 6.0f;
     const float listHeight = std::max(100.0f, ImGui::GetContentRegionAvail().y - bottomControlsHeight);
 
     if (ImGui::BeginTable("ShaderHashView",
@@ -1577,14 +1682,14 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
     // Bottom Navigation Row 1: Previous / Next
     if (ImGui::BeginTable("ShaderHuntNavPrimary", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoBordersInBody)) {
         ImGui::TableNextColumn();
-        if (repeatButton("◄ Previous")) {
+        if (repeatButton("< Previous")) {
             shaderManager->huntPreviousShader(false);
             navigationChanged = true;
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select previous collected shader");
 
         ImGui::TableNextColumn();
-        if (repeatButton("Next ►")) {
+        if (repeatButton("Next >")) {
             shaderManager->huntNextShader(false);
             navigationChanged = true;
         }
@@ -1596,14 +1701,14 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
     // Bottom Navigation Row 2: Marked Previous / Next
     if (ImGui::BeginTable("ShaderHuntNavMarked", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoBordersInBody)) {
         ImGui::TableNextColumn();
-        if (repeatButton("◄ Prev Marked")) {
+        if (repeatButton("< Prev Marked")) {
             shaderManager->huntPreviousShader(true);
             navigationChanged = true;
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select previous marked shader");
 
         ImGui::TableNextColumn();
-        if (repeatButton("Next Marked ►")) {
+        if (repeatButton("Next Marked >")) {
             shaderManager->huntNextShader(true);
             navigationChanged = true;
         }
@@ -1612,19 +1717,15 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
         ImGui::EndTable();
     }
 
-    // Bottom Actions Row 3: Mark / Copy / Clear
-    if (ImGui::BeginTable("ShaderHuntActions", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
-        ImGui::TableSetupColumn("Mark", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Copy", ImGuiTableColumnFlags_WidthFixed, 88.0f);
-        ImGui::TableSetupColumn("Clear", ImGuiTableColumnFlags_WidthFixed, 96.0f);
+    // Bottom Action Row 3: Mark / Unmark (Primary hunting action, prominent full-width)
+    if (ImGui::Button("Mark / Unmark", ImVec2(-1.0f, 0))) {
+        shaderManager->toggleMarkOnHuntedShader();
+        navigationChanged = true;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle mark on active shader (or double-click hash in list / press Enter)");
 
-        ImGui::TableNextColumn();
-        if (ImGui::Button("Mark / Unmark", ImVec2(-1.0f, 0))) {
-            shaderManager->toggleMarkOnHuntedShader();
-            navigationChanged = true;
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle mark on active shader (or double-click hash in list)");
-
+    // Bottom Actions Row 4: Copy Hash | Clear Marked (2 equal columns with plenty of width)
+    if (ImGui::BeginTable("ShaderHuntActionsSecondary", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoBordersInBody)) {
         ImGui::TableNextColumn();
         if (activeHuntedHash == 0)
             ImGui::BeginDisabled();
@@ -1776,86 +1877,96 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
 
                 bool hideMarkedShaders = group->getHideMarkedShaders();
-                if (DrawToggleSwitch("##HideMarkedShaders", &hideMarkedShaders))
+                if (DrawToggleRow("Hide marked shaders", &hideMarkedShaders,
+                                  "Suppress graphics draws matching this group's marked pixel or vertex shaders while the group is active.\nUseful for HUD-free screenshots, shader identification and configuration testing.\nCompute dispatches are not suppressed.",
+                                  hideMarkedShaders ? "Matching graphics draws are suppressed while this group is active." : nullptr,
+                                  4.0f)) {
                     group->setHideMarkedShaders(hideMarkedShaders);
-                ImGui::SameLine();
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextUnformatted("Hide marked shaders");
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Suppress graphics draws matching this group's marked pixel or vertex shaders while the group is active.\nUseful for HUD-free screenshots, shader identification and configuration testing.\nCompute dispatches are not suppressed.");
+                }
 
-                if (hideMarkedShaders)
-                    ImGui::TextDisabled("Matching graphics draws are suppressed while this group is active.");
-
-                ImGui::SameLine(0, 16.0f);
                 bool suppressDraw = group->getSuppressDrawCall();
-                if (DrawToggleSwitch("##SuppressDrawCallTop", &suppressDraw))
+                if (DrawToggleRow("Suppress draw calls", &suppressDraw,
+                                  "When enabled and this group is active, draw calls using this group's shaders are suppressed directly on the GPU.",
+                                  nullptr,
+                                  4.0f)) {
                     group->setSuppressDrawCall(suppressDraw);
-                ImGui::SameLine();
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextUnformatted("Suppress draw calls");
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("When enabled and this group is active, draw calls using this group's shaders are suppressed directly on the GPU.");
+                }
 
                 if (ImGui::TreeNode("Geometry Refine Filters")) {
                     bool matchIdx = group->getMatchIndexCount();
-                    if (DrawToggleSwitch("##MatchIdxOverlay", &matchIdx))
+                    if (DrawToggleRow("Filter by index count", &matchIdx, "Only trigger for draw calls with index count in specified range.", nullptr, 4.0f)) {
                         group->setMatchIndexCount(matchIdx);
-                    ImGui::SameLine();
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextUnformatted("Filter by index count");
+                    }
                     if (matchIdx) {
-                        ImGui::SameLine();
+                        ImGui::Indent(16.0f);
                         int idxMin = static_cast<int>(group->getIndexCountMin());
                         int idxMax = static_cast<int>(group->getIndexCountMax());
-                        ImGui::SetNextItemWidth(80.0f);
-                        if (ImGui::InputInt("Min##IdxOverlay", &idxMin, 0))
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("Min:");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(90.0f);
+                        if (ImGui::InputInt("##IdxMinOverlay", &idxMin, 0))
                             group->setIndexCountMin(std::max(0, idxMin));
                         ImGui::SameLine();
-                        ImGui::SetNextItemWidth(80.0f);
-                        if (ImGui::InputInt("Max##IdxOverlay", &idxMax, 0))
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("Max:");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(90.0f);
+                        if (ImGui::InputInt("##IdxMaxOverlay", &idxMax, 0))
                             group->setIndexCountMax(std::max(0, idxMax));
+                        ImGui::Unindent(16.0f);
                     }
 
                     bool matchVtx = group->getMatchVertexCount();
-                    if (DrawToggleSwitch("##MatchVtxOverlay", &matchVtx))
+                    if (DrawToggleRow("Filter by vertex count", &matchVtx, "Only trigger for draw calls with vertex count in specified range.", nullptr, 4.0f)) {
                         group->setMatchVertexCount(matchVtx);
-                    ImGui::SameLine();
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextUnformatted("Filter by vertex count");
+                    }
                     if (matchVtx) {
-                        ImGui::SameLine();
+                        ImGui::Indent(16.0f);
                         int vtxMin = static_cast<int>(group->getVertexCountMin());
                         int vtxMax = static_cast<int>(group->getVertexCountMax());
-                        ImGui::SetNextItemWidth(80.0f);
-                        if (ImGui::InputInt("Min##VtxOverlay", &vtxMin, 0))
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("Min:");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(90.0f);
+                        if (ImGui::InputInt("##VtxMinOverlay", &vtxMin, 0))
                             group->setVertexCountMin(std::max(0, vtxMin));
                         ImGui::SameLine();
-                        ImGui::SetNextItemWidth(80.0f);
-                        if (ImGui::InputInt("Max##VtxOverlay", &vtxMax, 0))
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("Max:");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(90.0f);
+                        if (ImGui::InputInt("##VtxMaxOverlay", &vtxMax, 0))
                             group->setVertexCountMax(std::max(0, vtxMax));
+                        ImGui::Unindent(16.0f);
                     }
 
                     bool matchInst = group->getMatchInstanceCount();
-                    if (DrawToggleSwitch("##MatchInstOverlay", &matchInst))
+                    if (DrawToggleRow("Filter by instance count", &matchInst, "Only trigger for draw calls with instance count in specified range.", nullptr, 4.0f)) {
                         group->setMatchInstanceCount(matchInst);
-                    ImGui::SameLine();
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextUnformatted("Filter by instance count");
+                    }
                     if (matchInst) {
-                        ImGui::SameLine();
+                        ImGui::Indent(16.0f);
                         int instMin = static_cast<int>(group->getInstanceCountMin());
                         int instMax = static_cast<int>(group->getInstanceCountMax());
-                        ImGui::SetNextItemWidth(80.0f);
-                        if (ImGui::InputInt("Min##InstOverlay", &instMin, 0))
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("Min:");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(90.0f);
+                        if (ImGui::InputInt("##InstMinOverlay", &instMin, 0))
                             group->setInstanceCountMin(std::max(0, instMin));
                         ImGui::SameLine();
-                        ImGui::SetNextItemWidth(80.0f);
-                        if (ImGui::InputInt("Max##InstOverlay", &instMax, 0))
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("Max:");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(90.0f);
+                        if (ImGui::InputInt("##InstMaxOverlay", &instMax, 0))
                             group->setInstanceCountMax(std::max(0, instMax));
+                        ImGui::Unindent(16.0f);
                     }
 
                     if (group->hasGeometryFilter()) {
+                        ImGui::Spacing();
                         if (ImGui::Button("Clear Geometry Filters##Overlay")) {
                             group->setMatchIndexCount(false);
                             group->setMatchVertexCount(false);
