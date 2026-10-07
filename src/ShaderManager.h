@@ -130,12 +130,10 @@ class ShaderManager {
     uint32_t getActiveHuntedShaderHash() const { return _activeHuntedShaderHash.load(std::memory_order_acquire); }
     int getActiveHuntedShaderIndex() const { return _activeHuntedShaderIndex; }
     void toggleHideMarkedShaders() { _hideMarkedShaders = !_hideMarkedShaders; }
-    bool isHideMarkedShaders() const { return _hideMarkedShaders; }
     void setHideMarkedShaders(bool hide) { _hideMarkedShaders = hide; }
 
     bool isHideHuntedShader() const { return _hideHuntedShader; }
     void setHideHuntedShader(bool hide) { _hideHuntedShader = hide; }
-    void toggleHideHuntedShader() { _hideHuntedShader = !_hideHuntedShader; }
 
     bool isHuntedShaderMarked() {
         std::shared_lock lock(_markedShaderHashMutex);

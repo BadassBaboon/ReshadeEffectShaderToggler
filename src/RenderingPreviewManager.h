@@ -13,12 +13,6 @@ class __declspec(novtable) RenderingPreviewManager final {
     void RecordVulkanHuntedTarget(reshade::api::command_list* cmd_list, uint32_t stageIndex, uint32_t shaderHash);
     void CaptureDeferredVulkanPreview(reshade::api::command_list* cmd_list);
     void CancelDeferredVulkanPreview(reshade::api::device* device);
-    const ResourceViewData GetCurrentPreviewResourceView(reshade::api::command_list* cmd_list,
-                                                         DeviceDataContainer& deviceData,
-                                                         const ShaderToggler::ToggleGroup* group,
-                                                         CommandListDataContainer& commandListData,
-                                                         uint32_t descIndex,
-                                                         uint64_t action);
 
   private:
     AddonImGui::AddonUIData& uiData;

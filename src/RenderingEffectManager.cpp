@@ -135,9 +135,6 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         const bool offSizeTarget =
           runtimeWidth > 0 && runtimeHeight > 0 &&
           (desc.texture.width != runtimeWidth || desc.texture.height != runtimeHeight);
-        const reshade::api::format backBufferFormat = GetBackBufferTypelessFormat(runtime);
-        const bool formatMismatch =
-          backBufferFormat != reshade::api::format::unknown && format_to_typeless(desc.texture.format) != backBufferFormat;
         const bool wantsNativeStaging = autoSceneColour && offSizeTarget;
         const bool vulkanAutoSceneColour = autoSceneColour && deviceApi == device_api::vulkan;
         const bool vulkanNativeStaging = vulkanAutoSceneColour && wantsNativeStaging;
@@ -368,8 +365,11 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         }
 
         if (RestDiag::Enabled()) {
-            // What render_technique will actually receive. Any mismatch with the swapchain here makes
-            // ReShade rebuild its back-buffer copy (and possibly reload effects) on this call.
+            // What render_technique will actually receive. A target that differs from the swapchain
+            // in size or format makes ReShade 6.x use (and on first use, compile) a separate effect permutation.
+            const reshade::api::format backBufferFormat = GetBackBufferTypelessFormat(runtime);
+            const bool formatMismatch =
+              backBufferFormat != reshade::api::format::unknown && format_to_typeless(desc.texture.format) != backBufferFormat;
             device* dev = runtime->get_device();
             const resource effectRes = dev->get_resource_from_view(view_non_srgb);
             const resource_desc effectDesc = dev->get_resource_desc(effectRes);
@@ -393,7 +393,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                              group->getRenderToResourceViews(),
                              effectDesc.texture.width, effectDesc.texture.height, RenderingManager::FormatName(effectDesc.texture.format),
                              RenderingManager::FormatName(effectViewDesc.format),
-                             effectMismatch ? " | MISMATCH: ReShade will rebuild its back-buffer copy" : "");
+                             effectMismatch ? " | differs from swapchain (separate ReShade effect permutation)" : "");
         }
 
         const bool restoreVulkanDirectTarget =

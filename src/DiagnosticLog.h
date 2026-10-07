@@ -29,7 +29,7 @@ struct Counters {
     std::atomic_uint64_t techniquesRendered{ 0 };   // render_technique calls for group techniques
     std::atomic_uint64_t stagedRenders{ 0 };        // group renders that went through the native staging copy
     std::atomic_uint64_t directRenders{ 0 };        // group renders straight into the game's target
-    std::atomic_uint64_t mismatchedDirectRenders{ 0 }; // direct renders into a target that differs from the swapchain
+    std::atomic_uint64_t mismatchedDirectRenders{ 0 }; // renders whose effect target differs from the swapchain in size or format
     std::atomic_uint64_t skippedRenders{ 0 };       // group renders skipped (buffers not ready, unsupported target...)
     std::atomic_uint64_t groupBufferRecreations{ 0 };
     std::atomic_uint64_t effectReloads{ 0 };
@@ -119,7 +119,7 @@ inline void OnPresent() {
 
     const uint64_t frames = g_counters.frames.exchange(0);
     const double perFrame = frames > 0 ? 1.0 / (frames * 1000.0) : 0.0; // micros -> ms per frame
-    Log("summary {:.1f}s: {} frames ({:.1f} fps, {:.2f} ms/frame) | RenderEffects calls={} techniques={} | staged={} direct={} direct-mismatched={} skipped={} | "
+    Log("summary {:.1f}s: {} frames ({:.1f} fps, {:.2f} ms/frame) | RenderEffects calls={} techniques={} | staged={} direct={} swapchain-mismatched={} skipped={} | "
         "group buffer recreations={} | ReShade effect reloads={} | CPU ms/frame: RenderEffects={:.3f} render_technique={:.3f} (max single {:.3f}) staging={:.3f} present={:.3f}",
         seconds,
         frames,

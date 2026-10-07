@@ -1,12 +1,12 @@
 # ReshadeEffectShaderToggler [![MSBuild](https://github.com/BadassBaboon/ReshadeEffectShaderToggler/actions/workflows/msbuild.yml/badge.svg)](https://github.com/BadassBaboon/ReshadeEffectShaderToggler/actions/workflows/msbuild.yml) [![Release](https://github.com/BadassBaboon/ReshadeEffectShaderToggler/actions/workflows/release.yml/badge.svg)](https://github.com/BadassBaboon/ReshadeEffectShaderToggler/actions/workflows/release.yml)
-Reshade 6.0+ addon to apply Reshade effects to render targets bound before specific, user-configurable, groups of shaders are 
+Reshade 6.8+ addon to apply Reshade effects to render targets bound before specific, user-configurable, groups of shaders are 
 encountered within a game's rendering pipeline.
 
 ## Fork notes
 This fork extends **ReshadeEffectShaderToggler (REST)** with support for **Direct3D 12**, **Vulkan**, **Direct3D 9 (32-bit `addon32`)**, updated **ReShade 6.x API** compatibility, and quality-of-life workflow improvements, while maintaining the Direct3D 10/11 compatibility.
 ### Key Features & Improvements
 * **ReShade 6.x API Upgrade:**
-  * Updated SDK headers to ReShade 6.3+ (API 18 / ImGui 1.92.5).
+  * Built against the ReShade 6.8.0 SDK (add-on API 20 / ImGui 1.92.5). Requires ReShade 6.8.0 or newer with add-on support.
   * Updated private data access (`get_private_data<T>()`) to support pointer-return semantics (`T*`), ensuring compatibility across modern ReShade 6.x builds.
 * **Quality-of-Life (QoL) Enhancements:**
   * **Working Group Hotkeys:** Fixed per-group shortcut key binding evaluation (`CheckHotkeys`), enabling functional real-time keybind toggling per group.
@@ -27,7 +27,7 @@ This fork extends **ReshadeEffectShaderToggler (REST)** with support for **Direc
   * Resolved a C++ short-circuit evaluation bug in `_RenderEffects()` where simultaneous Pixel, Vertex, or Compute shader toggles at the same draw call invocation could cause secondary stages to be skipped. Active stages now evaluate independently.
 
 ## How to use
-Place the `ReshadeEffectShaderToggler.addon` in the same folder as where the game exe is located. This is in most cases the same folder as where the Reshade 5.8+ dll
+Place the `ReshadeEffectShaderToggler.addon` in the same folder as where the game exe is located. This is in most cases the same folder as where the Reshade 6.8+ dll
 is located. For Unreal Engine powered games there might be two
 game exe's: one in the game's installation folder, and one in a folder deeper into that folder, e.g. 
 `GameName\Binaries\Win64\GameName-Win64-Shipping.exe`; the shader toggler addon has to be in that second folder, in our example:

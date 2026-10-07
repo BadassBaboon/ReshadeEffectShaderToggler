@@ -796,14 +796,13 @@ static void CheckDrawCall(command_list* cmd_list, const uint64_t match_modifier 
     }
 }
 
-static void ClearSuppressedCallState(CommandListDataContainer& commandListData, uint64_t matchModifier, bool clearBlockedGroups = true) {
-    auto clearStage = [clearBlockedGroups](ShaderData& stage) {
+static void ClearSuppressedCallState(CommandListDataContainer& commandListData, uint64_t matchModifier) {
+    auto clearStage = [](ShaderData& stage) {
         stage.bindingsToUpdate.clear();
         stage.constantBuffersToUpdate.clear();
         stage.techniquesToRender.clear();
         stage.srvToUpdate.clear();
-        if (clearBlockedGroups)
-            stage.blockedShaderGroups.clear();
+        stage.blockedShaderGroups.clear();
     };
 
     uint64_t clearMask = 0;
