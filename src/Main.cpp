@@ -121,7 +121,7 @@ static void onInitDevice(device* device) {
 }
 
 static void onDestroyDevice(device* device) {
-    DeviceDataContainer& data = device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = (*device->get_private_data<DeviceDataContainer>());
 
     groupResourceManager.DisposeGroupBuffers(device, g_addonUIData.GetToggleGroups());
     groupResourceManager.DisposeGroupBuffers(device, g_addonUIData.GetRetiredToggleGroups());
@@ -146,19 +146,19 @@ static void onDestroyCommandList(command_list* commandList) {
 }
 
 static void onResetCommandList(command_list* commandList) {
-    CommandListDataContainer& commandListData = commandList->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& commandListData = (*commandList->get_private_data<CommandListDataContainer>());
     commandListData.Reset();
 }
 
-static bool onCreateSwapchain(swapchain_desc& desc, void* hwnd) {
+static bool onCreateSwapchain(device_api, swapchain_desc& desc, void* hwnd) {
     return resourceManager.OnCreateSwapchain(desc, hwnd);
 }
 
-static void onInitSwapchain(reshade::api::swapchain* swapchain) {
+static void onInitSwapchain(reshade::api::swapchain* swapchain, bool) {
     resourceManager.OnInitSwapchain(swapchain);
 }
 
-static void onDestroySwapchain(reshade::api::swapchain* swapchain) {
+static void onDestroySwapchain(reshade::api::swapchain* swapchain, bool) {
     resourceManager.OnDestroySwapchain(swapchain);
 }
 
@@ -197,8 +197,8 @@ static void onReshadeReloadedEffects(effect_runtime* runtime) {
     RestDiag::Log("ReShade reloaded effects");
     RestDiag::RequestDetail();
 
-    RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
-    DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
+    RuntimeDataContainer& runtimeData = (*runtime->get_private_data<RuntimeDataContainer>());
+    DeviceDataContainer& deviceData = (*runtime->get_device()->get_private_data<DeviceDataContainer>());
 
     {
         unique_lock<shared_mutex> renderLock(deviceData.render_mutex);
@@ -215,7 +215,7 @@ static void onReshadeReloadedEffects(effect_runtime* runtime) {
 }
 
 static bool onReshadeSetTechniqueState(effect_runtime* runtime, effect_technique technique, bool enabled) {
-    RuntimeDataContainer& data = runtime->get_private_data<RuntimeDataContainer>();
+    RuntimeDataContainer& data = (*runtime->get_private_data<RuntimeDataContainer>());
 
     bool ret = techniqueManager.OnReshadeSetTechniqueState(runtime, technique, enabled);
 
@@ -223,8 +223,8 @@ static bool onReshadeSetTechniqueState(effect_runtime* runtime, effect_technique
 }
 
 static bool onReshadeReorderTechniques(effect_runtime* runtime, size_t count, effect_technique* techniques) {
-    RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
-    DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
+    RuntimeDataContainer& runtimeData = (*runtime->get_private_data<RuntimeDataContainer>());
+    DeviceDataContainer& deviceData = (*runtime->get_device()->get_private_data<DeviceDataContainer>());
 
     bool ret = techniqueManager.OnReshadeReorderTechniques(runtime, count, techniques);
 
@@ -238,7 +238,7 @@ static bool onReshadeReorderTechniques(effect_runtime* runtime, size_t count, ef
 
 static void onInitEffectRuntime(effect_runtime* runtime) {
     runtime->create_private_data<RuntimeDataContainer>();
-    DeviceDataContainer& data = runtime->get_device()->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = (*runtime->get_device()->get_private_data<DeviceDataContainer>());
 
     keyMonitor.Init(runtime);
     renderingShaderManager.InitShaders(runtime->get_device());
@@ -256,7 +256,7 @@ static void onInitEffectRuntime(effect_runtime* runtime) {
 
 static void onDestroyEffectRuntime(effect_runtime* runtime) {
     device* const device = runtime->get_device();
-    DeviceDataContainer& data = device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = (*device->get_private_data<DeviceDataContainer>());
 
     const bool hasOtherRuntimeOnDevice = std::any_of(runtimes.begin(), runtimes.end(), [runtime, device](effect_runtime* candidate) {
         return candidate != runtime && candidate->get_device() == device;
@@ -355,8 +355,8 @@ static void onBindPipeline(command_list* commandList, pipeline_stage stages, pip
         // draw call with unknown handle, don't collect it
         return;
     }
-    CommandListDataContainer& commandListData = commandList->get_private_data<CommandListDataContainer>();
-    DeviceDataContainer& deviceData = commandList->get_device()->get_private_data<DeviceDataContainer>();
+    CommandListDataContainer& commandListData = (*commandList->get_private_data<CommandListDataContainer>());
+    DeviceDataContainer& deviceData = (*commandList->get_device()->get_private_data<DeviceDataContainer>());
 
     if (deviceData.current_runtime == nullptr || !deviceData.current_runtime->get_effects_state()) {
         return;
@@ -434,8 +434,8 @@ static void onBindRenderTargetsAndDepthStencil(command_list* cmd_list, uint32_t 
     }
 
     device* device = cmd_list->get_device();
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
-    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
+    DeviceDataContainer& deviceData = (*device->get_private_data<DeviceDataContainer>());
 
     // if (count > 0)
     //{
@@ -468,7 +468,7 @@ static void onBarrier(command_list* cmd_list,
         return;
     }
 
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
 
     // An end_render_pass callback may describe either a real render-pass end or the
     // first half of vkCmdNextSubpass. Seeing a subsequent barrier proves the actual
@@ -480,33 +480,36 @@ static void onBarrier(command_list* cmd_list,
     }
 
     if (commandListData.vulkanAutoInjectionActive || commandListData.vulkanInsideRenderPass ||
-        !cmd_list->get_device()->get_private_data<DeviceDataContainer>().vulkanAutoWorkPending.load(std::memory_order_acquire))
+        !(*cmd_list->get_device()->get_private_data<DeviceDataContainer>()).vulkanAutoWorkPending.load(std::memory_order_acquire))
         return;
 
     renderingEffectManager.RenderDeferredVulkanAutoEffectsAfterBarrier(cmd_list, count, resources, oldStates, newStates);
 }
 
-static void onBeginRenderPass(command_list* cmd_list, uint32_t count, const render_pass_render_target_desc* rts, const render_pass_depth_stencil_desc* ds) {
+static bool onBeginRenderPass(command_list* cmd_list, uint32_t count, const render_pass_render_target_desc* rts, const render_pass_depth_stencil_desc* ds, render_pass_flags flags) {
     if (cmd_list == nullptr || cmd_list->get_device() == nullptr) {
-        return;
+        return false;
     }
+    // A resumed (Vulkan dynamic rendering) pass continues the previous one: not a safe boundary.
+    const bool resumesPass = (flags & render_pass_flags::resume) != render_pass_flags::none;
+    const bool suspendsPass = (flags & render_pass_flags::suspend) != render_pass_flags::none;
 
     device* device = cmd_list->get_device();
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
-    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
+    DeviceDataContainer& deviceData = (*device->get_private_data<DeviceDataContainer>());
     const bool vulkan = device->get_api() == device_api::vulkan;
 
     if (deviceData.current_runtime == nullptr || !deviceData.current_runtime->get_effects_state()) {
         if (vulkan) {
             commandListData.vulkanInsideRenderPass = true;
             commandListData.vulkanRenderPassEndPending = false;
-            commandListData.vulkanRenderPassSuspends = false;
+            commandListData.vulkanRenderPassSuspends = suspendsPass;
         }
-        return;
+        return false;
     }
 
     if (vulkan) {
-        const bool safeVulkanBoundary = !commandListData.vulkanInsideRenderPass;
+        const bool safeVulkanBoundary = !commandListData.vulkanInsideRenderPass && !resumesPass;
         if (safeVulkanBoundary &&
             deviceData.vulkanPreviewWorkPending.load(std::memory_order_acquire))
             renderingPreviewManager.CaptureDeferredVulkanPreview(cmd_list);
@@ -514,7 +517,7 @@ static void onBeginRenderPass(command_list* cmd_list, uint32_t count, const rend
         // Vulkan does not emit bind_render_targets_and_depth_stencil events for render
         // pass attachments. Mirror the begin_render_pass descriptors into REST's state
         // tracker so a marked draw can resolve the live primary colour target.
-        state_tracking& trackedState = cmd_list->get_private_data<state_tracking>();
+        state_tracking& trackedState = (*cmd_list->get_private_data<state_tracking>());
         trackedState.render_targets.clear();
         trackedState.render_targets.reserve(count);
         for (uint32_t i = 0; i < count; ++i)
@@ -530,7 +533,7 @@ static void onBeginRenderPass(command_list* cmd_list, uint32_t count, const rend
 
         commandListData.vulkanInsideRenderPass = true;
         commandListData.vulkanRenderPassEndPending = false;
-        commandListData.vulkanRenderPassSuspends = false;
+        commandListData.vulkanRenderPassSuspends = suspendsPass;
         if (commandListData.commandQueue & Rendering::CHECK_MATCH_DRAW_BINDING) {
             renderingBindingManager.UpdateTextureBindings(cmd_list, Rendering::CALL_DRAW, Rendering::MATCH_BINDING_PS | Rendering::MATCH_BINDING_VS);
         }
@@ -538,7 +541,7 @@ static void onBeginRenderPass(command_list* cmd_list, uint32_t count, const rend
         if (commandListData.commandQueue & Rendering::CHECK_MATCH_DRAW_EFFECT) {
             renderingEffectManager.RenderEffects(cmd_list, Rendering::CALL_DRAW, Rendering::MATCH_EFFECT_PS | Rendering::MATCH_EFFECT_VS);
         }
-        return;
+        return false;
     }
 
     // D3D12 (and other APIs with render passes): flush work queued for the upcoming draw here,
@@ -552,25 +555,28 @@ static void onBeginRenderPass(command_list* cmd_list, uint32_t count, const rend
     if (commandListData.commandQueue & Rendering::CHECK_MATCH_DRAW_EFFECT) {
         renderingEffectManager.RenderEffects(cmd_list, Rendering::CALL_DRAW, Rendering::MATCH_EFFECT_PS | Rendering::MATCH_EFFECT_VS);
     }
+
+    return false;
 }
 
-static void onEndRenderPass(command_list* cmd_list) {
+static bool onEndRenderPass(command_list* cmd_list) {
     if (cmd_list == nullptr || cmd_list->get_device() == nullptr ||
         cmd_list->get_device()->get_api() != device_api::vulkan) {
-        return;
+        return false;
     }
 
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
 
     if (commandListData.vulkanRenderPassSuspends) {
         commandListData.vulkanInsideRenderPass = true;
         commandListData.vulkanRenderPassEndPending = false;
         commandListData.vulkanRenderPassSuspends = false;
-        return;
+        return false;
     }
 
     commandListData.vulkanInsideRenderPass = true;
     commandListData.vulkanRenderPassEndPending = true;
+    return false;
 }
 
 static void onReshadeOverlay(effect_runtime* runtime) {
@@ -584,7 +590,7 @@ static void onPresent(command_queue* queue,
                       uint32_t dirty_rect_count,
                       const rect* dirty_rects) {
     device* dev = queue->get_device();
-    DeviceDataContainer& deviceData = dev->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& deviceData = (*dev->get_private_data<DeviceDataContainer>());
 
     if (deviceData.current_runtime == nullptr) {
         return;
@@ -607,7 +613,7 @@ static void onReshadePresent(effect_runtime* runtime) {
     if (RestDiag::Enabled())
         presentTimer.emplace(RestDiag::g_counters.presentCpuMicros);
     device* dev = runtime->get_device();
-    DeviceDataContainer& deviceData = dev->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& deviceData = (*dev->get_private_data<DeviceDataContainer>());
     command_queue* queue = runtime->get_command_queue();
 
     {
@@ -768,7 +774,7 @@ static void UnInit() {
 }
 
 static void CheckDrawCall(command_list* cmd_list, const uint64_t match_modifier = Rendering::MATCH_ALL) {
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
 
     if (commandListData.commandQueue & Rendering::MATCH_ALL & match_modifier) {
         if (constantHandler != nullptr && (commandListData.commandQueue & Rendering::MATCH_CONST & match_modifier)) {
@@ -823,7 +829,7 @@ static bool ShouldSuppressVulkanHuntedCall(command_list* cmd_list, uint64_t matc
     if (cmd_list == nullptr || cmd_list->get_device() == nullptr || cmd_list->get_device()->get_api() != device_api::vulkan)
         return false;
 
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
 
     const bool huntingPS = g_pixelShaderManager.isInHuntingMode();
     const bool huntingVS = g_vertexShaderManager.isInHuntingMode();
@@ -893,7 +899,7 @@ static bool IsComputeCallBlocked(const CommandListDataContainer& commandListData
 }
 
 static bool onDraw(command_list* cmd_list, uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance) {
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
     commandListData.hasDrawGeometry = true;
     commandListData.isIndexedDraw = false;
     commandListData.currentDrawCount = vertex_count;
@@ -915,7 +921,7 @@ static bool onDraw(command_list* cmd_list, uint32_t vertex_count, uint32_t insta
 }
 
 static bool onDispatch(command_list* cmd_list, uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z) {
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
     commandListData.hasDrawGeometry = false;
     commandListData.isIndexedDraw = false;
     commandListData.currentDrawCount = 0;
@@ -935,7 +941,7 @@ static bool onDrawIndexed(command_list* cmd_list,
                           uint32_t first_index,
                           int32_t vertex_offset,
                           uint32_t first_instance) {
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
     commandListData.hasDrawGeometry = true;
     commandListData.isIndexedDraw = true;
     commandListData.currentDrawCount = index_count;
@@ -957,7 +963,7 @@ static bool onDrawIndexed(command_list* cmd_list,
 }
 
 static bool onDrawOrDispatchIndirect(command_list* cmd_list, indirect_command type, resource buffer, uint64_t offset, uint32_t draw_count, uint32_t stride) {
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
     commandListData.hasDrawGeometry = false;
     commandListData.isIndexedDraw = false;
     commandListData.currentDrawCount = 0;

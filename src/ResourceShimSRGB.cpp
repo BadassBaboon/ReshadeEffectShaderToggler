@@ -110,9 +110,9 @@ bool ResourceShimSRGB::OnCreateResourceView(reshade::api::device* device,
             if (desc.type == resource_view_type::unknown) {
                 desc.type = texture_desc.texture.depth_or_layers > 1 ? resource_view_type::texture_2d_array : resource_view_type::texture_2d;
                 desc.texture.first_level = 0;
-                desc.texture.level_count = (usage_type == resource_usage::shader_resource) ? UINT32_MAX : 1;
+                desc.texture.levels = (usage_type == resource_usage::shader_resource) ? UINT32_MAX : 1;
                 desc.texture.first_layer = 0;
-                desc.texture.layer_count = (usage_type == resource_usage::shader_resource) ? UINT32_MAX : 1;
+                desc.texture.layers = (usage_type == resource_usage::shader_resource) ? UINT32_MAX : 1;
             }
 
             return true;

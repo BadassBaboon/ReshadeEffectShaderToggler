@@ -75,7 +75,7 @@ void RenderingShaderManager::InitShader(reshade::api::device* device,
         if (quad == 0 && device->get_api() == device_api::d3d9) {
             const uint32_t num_vertices = 4;
 
-            if (!device->create_resource(resource_desc(num_vertices * sizeof(vert_input), memory_heap::cpu_to_gpu, resource_usage::vertex_buffer),
+            if (!device->create_resource(resource_desc(num_vertices * sizeof(vert_input), memory_heap::upload, resource_usage::vertex_buffer),
                                          nullptr,
                                          resource_usage::cpu_access,
                                          &quad)) {
@@ -98,7 +98,7 @@ void RenderingShaderManager::InitShader(reshade::api::device* device,
 }
 
 void RenderingShaderManager::InitShaders(reshade::api::device* device) {
-    DeviceDataContainer& shader = device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& shader = (*device->get_private_data<DeviceDataContainer>());
 
     if (device->get_api() == device_api::d3d9) {
         InitShader(device,
@@ -138,7 +138,7 @@ void RenderingShaderManager::InitShaders(reshade::api::device* device) {
 }
 
 void RenderingShaderManager::DestroyShaders(reshade::api::device* device) {
-    DeviceDataContainer& shader = device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& shader = (*device->get_private_data<DeviceDataContainer>());
 
     std::unique_lock<std::shared_mutex> lock(shader.customShader.pipeline_mutex);
 
@@ -274,7 +274,7 @@ void RenderingShaderManager::ApplyShader(command_list* cmd_list,
         return;
     }
 
-    cmd_list->get_private_data<state_tracking>().capture(cmd_list, true);
+    (*cmd_list->get_private_data<state_tracking>()).capture(cmd_list, true);
 
     cmd_list->bind_render_targets_and_depth_stencil(1, &rtv_dst);
 
@@ -300,7 +300,7 @@ void RenderingShaderManager::ApplyShader(command_list* cmd_list,
 
 void RenderingShaderManager::CopyResource(command_list* cmd_list, resource_view srv_src, resource_view rtv_dst, uint32_t width, uint32_t height) {
     device* device = cmd_list->get_device();
-    DeviceDataContainer& data = device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = (*device->get_private_data<DeviceDataContainer>());
 
     reshade::api::format target_format = device->get_resource_desc(device->get_resource_from_view(rtv_dst)).texture.format;
     reshade::api::pipeline pipeline = GetOrCompilePipeline(device,
@@ -322,7 +322,7 @@ void RenderingShaderManager::CopyResource(command_list* cmd_list, resource_view 
                 width,
                 height);
 
-    cmd_list->get_private_data<state_tracking>().apply(cmd_list, true);
+    (*cmd_list->get_private_data<state_tracking>()).apply(cmd_list, true);
 }
 
 void RenderingShaderManager::CopyResourceMaskAlpha(reshade::api::command_list* cmd_list,
@@ -331,7 +331,7 @@ void RenderingShaderManager::CopyResourceMaskAlpha(reshade::api::command_list* c
                                                    uint32_t width,
                                                    uint32_t height) {
     device* device = cmd_list->get_device();
-    DeviceDataContainer& data = device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& data = (*device->get_private_data<DeviceDataContainer>());
 
     reshade::api::format target_format = device->get_resource_desc(device->get_resource_from_view(rtv_dst)).texture.format;
     reshade::api::pipeline pipeline = GetOrCompilePipeline(device,
@@ -353,6 +353,6 @@ void RenderingShaderManager::CopyResourceMaskAlpha(reshade::api::command_list* c
                 width,
                 height);
 
-    cmd_list->get_private_data<state_tracking>().apply(cmd_list, true);
+    (*cmd_list->get_private_data<state_tracking>()).apply(cmd_list, true);
 }
 

@@ -48,7 +48,7 @@ void ConstantCopyBase::OnInitResource(device* device,
                                       const subresource_data* initData,
                                       resource_usage usage,
                                       reshade::api::resource handle) {
-    if (desc.heap == memory_heap::cpu_to_gpu && static_cast<uint32_t>(desc.usage & resource_usage::constant_buffer)) {
+    if (desc.heap == memory_heap::upload && static_cast<uint32_t>(desc.usage & resource_usage::constant_buffer)) {
         CreateHostConstantBuffer(device, handle, static_cast<size_t>(desc.buffer.size));
         if (initData != nullptr && initData->data != nullptr) {
             SetHostConstantBuffer(handle.handle, initData->data, static_cast<size_t>(desc.buffer.size), 0, desc.buffer.size);
@@ -58,7 +58,7 @@ void ConstantCopyBase::OnInitResource(device* device,
 
 void ConstantCopyBase::OnDestroyResource(device* device, resource res) {
     resource_desc desc = device->get_resource_desc(res);
-    if (desc.heap == memory_heap::cpu_to_gpu && static_cast<uint32_t>(desc.usage & resource_usage::constant_buffer)) {
+    if (desc.heap == memory_heap::upload && static_cast<uint32_t>(desc.usage & resource_usage::constant_buffer)) {
         DeleteHostConstantBuffer(res);
     }
 }

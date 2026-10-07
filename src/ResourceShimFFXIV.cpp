@@ -38,7 +38,7 @@ bool ResourceShimFFXIV::OnCreateResource(reshade::api::device* device,
                 if (*reinterpret_cast<uintptr_t*>(ffxiv_recreation_struct + RT_OFFSET_LIST[i]) == reinterpret_cast<uintptr_t>(ffxiv_texture_data)) {
                     switch (RT_OFFSET_LIST[i]) {
                         case RT_OFFSET::RT_UI: {
-                            DeviceDataContainer& dev = device->get_private_data<DeviceDataContainer>();
+                            DeviceDataContainer& dev = (*device->get_private_data<DeviceDataContainer>());
                             if (dev.current_runtime == nullptr) {
                                 return false;
                             }
@@ -67,7 +67,7 @@ bool ResourceShimFFXIV::OnCreateResource(reshade::api::device* device,
 
             switch (rt_offset) {
                 case RT_OFFSET::RT_UI: {
-                    DeviceDataContainer& dev = device->get_private_data<DeviceDataContainer>();
+                    DeviceDataContainer& dev = (*device->get_private_data<DeviceDataContainer>());
                     if (dev.current_runtime == nullptr) {
                         return false;
                     }
@@ -109,9 +109,9 @@ bool ResourceShimFFXIV::OnCreateResourceView(reshade::api::device* device,
     if (desc.type == resource_view_type::unknown) {
         desc.type = texture_desc.texture.depth_or_layers > 1 ? resource_view_type::texture_2d_array : resource_view_type::texture_2d;
         desc.texture.first_level = 0;
-        desc.texture.level_count = (usage_type == resource_usage::shader_resource) ? UINT32_MAX : 1;
+        desc.texture.levels = (usage_type == resource_usage::shader_resource) ? UINT32_MAX : 1;
         desc.texture.first_layer = 0;
-        desc.texture.layer_count = (usage_type == resource_usage::shader_resource) ? UINT32_MAX : 1;
+        desc.texture.layers = (usage_type == resource_usage::shader_resource) ? UINT32_MAX : 1;
     }
 
     if (ffxiv_recreation_struct != 0) {

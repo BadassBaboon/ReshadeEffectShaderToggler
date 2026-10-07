@@ -26,8 +26,8 @@ bool RenderingEffectManager::RenderRemainingEffects(effect_runtime* runtime) {
 
     command_list* cmd_list = runtime->get_command_queue()->get_immediate_command_list();
     device* device = runtime->get_device();
-    RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
-    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    RuntimeDataContainer& runtimeData = (*runtime->get_private_data<RuntimeDataContainer>());
+    DeviceDataContainer& deviceData = (*device->get_private_data<DeviceDataContainer>());
     bool rendered = false;
 
     resource res = runtime->get_current_back_buffer();
@@ -69,7 +69,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                                             bool vulkanSafeBoundary,
                                             const unordered_map<uint64_t, resource_usage>* allowedVulkanTargets) {
     bool rendered = false;
-    CommandListDataContainer& cmdData = cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& cmdData = (*cmd_list->get_private_data<CommandListDataContainer>());
     effect_runtime* runtime = deviceData.current_runtime;
 
     unordered_map<ToggleGroup*, pair<vector<EffectData*>, ResourceRenderData>> groupTechMap;
@@ -340,8 +340,8 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                 reshade::api::resource_view bound_dsv = { 0 };
 
                 if (strict_copy) {
-                    bound_rtvs = cmd_list->get_private_data<state_tracking>().render_targets;
-                    bound_dsv = cmd_list->get_private_data<state_tracking>().depth_stencil;
+                    bound_rtvs = (*cmd_list->get_private_data<state_tracking>()).render_targets;
+                    bound_dsv = (*cmd_list->get_private_data<state_tracking>()).depth_stencil;
                     // Unbind render targets so we can safely transition them without DX12 validation errors
                     cmd_list->bind_render_targets_and_depth_stencil(0, nullptr, { 0 });
                 }
@@ -557,7 +557,7 @@ void RenderingEffectManager::RenderDeferredVulkanAutoEffectsAfterBarrier(command
         return;
     }
 
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
     if (commandListData.vulkanAutoInjectionActive || commandListData.vulkanInsideRenderPass)
         return;
 
@@ -595,7 +595,7 @@ void RenderingEffectManager::_RenderDeferredVulkanAutoEffects(
     if (cmd_list == nullptr || cmd_list->get_device() == nullptr || safeTargets.empty())
         return;
 
-    DeviceDataContainer& deviceData = cmd_list->get_device()->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& deviceData = (*cmd_list->get_device()->get_private_data<DeviceDataContainer>());
     if (deviceData.current_runtime == nullptr)
         return;
 
@@ -603,7 +603,7 @@ void RenderingEffectManager::_RenderDeferredVulkanAutoEffects(
     if (deviceData.vulkanAutoPendingEffects.empty())
         return;
 
-    RuntimeDataContainer& runtimeData = deviceData.current_runtime->get_private_data<RuntimeDataContainer>();
+    RuntimeDataContainer& runtimeData = (*deviceData.current_runtime->get_private_data<RuntimeDataContainer>());
     unordered_set<EffectData*> toRenderNames;
 
     for (const auto& [effect, data] : deviceData.vulkanAutoPendingEffects) {
@@ -622,7 +622,7 @@ void RenderingEffectManager::_RenderDeferredVulkanAutoEffects(
     if (toRenderNames.empty())
         return;
 
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
     commandListData.vulkanAutoInjectionActive = true;
 
     if (!deviceData.rendered_effects) {
@@ -664,8 +664,8 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
     }
 
     device* device = cmd_list->get_device();
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
-    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
+    DeviceDataContainer& deviceData = (*device->get_private_data<DeviceDataContainer>());
 
     // Remove call location from queue
     commandListData.commandQueue &= ~(invocation << (callLocation * MATCH_DELIMITER));
@@ -678,7 +678,7 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
         return;
     }
 
-    RuntimeDataContainer& runtimeData = deviceData.current_runtime->get_private_data<RuntimeDataContainer>();
+    RuntimeDataContainer& runtimeData = (*deviceData.current_runtime->get_private_data<RuntimeDataContainer>());
     bool toRender = false;
     unordered_set<EffectData*> psToRenderNames;
     unordered_set<EffectData*> vsToRenderNames;
@@ -743,7 +743,7 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
 
     if (rendered) {
         RestDiag::Count(RestDiag::g_counters.renderEffectsCalls);
-        cmd_list->get_private_data<state_tracking>().apply(cmd_list);
+        (*cmd_list->get_private_data<state_tracking>()).apply(cmd_list);
     }
 }
 
@@ -751,8 +751,8 @@ void RenderingEffectManager::PreventRuntimeReload(reshade::api::effect_runtime* 
     if (runtime == nullptr)
         return;
 
-    RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
-    DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
+    RuntimeDataContainer& runtimeData = (*runtime->get_private_data<RuntimeDataContainer>());
+    DeviceDataContainer& deviceData = (*runtime->get_device()->get_private_data<DeviceDataContainer>());
 
     // cringe
     if (runtimeData.specialEffects[REST_NOOP].technique != 0) {

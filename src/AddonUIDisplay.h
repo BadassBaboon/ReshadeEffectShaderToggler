@@ -442,7 +442,7 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
     if (group == nullptr)
         return;
 
-    RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
+    RuntimeDataContainer& runtimeData = (*runtime->get_private_data<RuntimeDataContainer>());
     static char searchBuf[256] = "\0";
 
     bool allowAll = group->getAllowAllTechniques();
@@ -677,7 +677,8 @@ static void DrawPreview(unsigned long long textureId,
 
     ImGui::SetCursorPos(ImVec2(origin.x + (width - new_width) * 0.5f, origin.y + (height - new_height) * 0.5f));
 
-    ImGui::Image(textureId, ImVec2(new_width, new_height), ImVec2(0, 0), ImVec2(1, 1), tint);
+    // ImGui 1.92 moved the tint parameter from Image() to ImageWithBg().
+    ImGui::ImageWithBg(textureId, ImVec2(new_width, new_height), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), tint);
 
     ImGui::PopStyleVar();
 }
@@ -687,7 +688,7 @@ static void DisplayPreview(AddonImGui::AddonUIData& instance,
                            reshade::api::effect_runtime* runtime,
                            ShaderToggler::ToggleGroup* group,
                            float width = 0) {
-    DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& deviceData = (*runtime->get_device()->get_private_data<DeviceDataContainer>());
     reshade::api::resource_view srv = reshade::api::resource_view{ 0 };
     resManager.SetPongPreviewHandles(runtime->get_device(), nullptr, nullptr, &srv);
     bool clearAlpha = group->getClearPreviewAlpha();
@@ -1600,10 +1601,32 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
                 ImGui::PopStyleColor();
         };
 
-        for (const ShaderListEntry& entry : visibleHashes) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            drawHash(entry);
+        // Only rows in view are built (games can collect thousands of shaders), but the
+        // selected row is always included so keyboard focus and selection stay consistent.
+        int selectedRow = -1;
+        for (size_t i = 0; i < visibleHashes.size(); ++i) {
+            if (visibleHashes[i].collected && visibleHashes[i].hash == selectedHash) {
+                selectedRow = static_cast<int>(i);
+                break;
+            }
+        }
+
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(visibleHashes.size()));
+        if (selectedRow >= 0)
+            clipper.IncludeItemByIndex(selectedRow);
+        while (clipper.Step()) {
+            for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                drawHash(visibleHashes[static_cast<size_t>(row)]);
+                // Keep the selection in view when it changes via hotkeys or the nav buttons.
+                static uint32_t s_lastScrolledHash = 0;
+                if (row == selectedRow && s_lastScrolledHash != selectedHash) {
+                    ImGui::SetScrollHereY(0.5f);
+                    s_lastScrolledHash = selectedHash;
+                }
+            }
         }
 
         ImGui::EndTable();
@@ -2262,7 +2285,7 @@ static void DrawCategoryGroups(AddonImGui::AddonUIData& instance, reshade::api::
     if (ImGui::Button("Import Group")) {
         const char* clipboard = ImGui::GetClipboardText();
         if (clipboard != nullptr && instance.ImportToggleGroup(clipboard) != nullptr) {
-            RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
+            RuntimeDataContainer& runtimeData = (*runtime->get_private_data<RuntimeDataContainer>());
             std::shared_lock<std::shared_mutex> techLock(runtimeData.technique_mutex);
             instance.AssignPreferredGroupTechniques(runtimeData.allTechniques);
             groupClipboardStatus = "Group imported from clipboard.";
@@ -2999,9 +3022,10 @@ static void DisplayRestTab(AddonImGui::AddonUIData& instance, reshade::api::effe
 
         ImGui::Dummy(ImVec2(0.0f, 4.0f));
         ImGui::Indent(6.0f);
-        ImGui::SetWindowFontScale(1.25f);
+        // ImGui 1.92 (ReShade 6.5+) scales text by pushing a font size; SetWindowFontScale is gone.
+        ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.25f);
         ImGui::TextUnformatted(cat_titles[s_currentRestCategory]);
-        ImGui::SetWindowFontScale(1.0f);
+        ImGui::PopFont();
         ImGui::Unindent(6.0f);
         ImGui::Dummy(ImVec2(0.0f, 10.0f));
 

@@ -197,7 +197,7 @@ void ToggleGroupResourceManager::CheckGroupBuffers(reshade::api::effect_runtime*
                     ? (resources.view_format != format::unknown ? resources.view_format : format_to_default_typed(desc.texture.format, 0))
                     : format_to_typeless(desc.texture.format);
                 resource_desc group_desc =
-                  resource_desc(desc.texture.width, desc.texture.height, 1, 1, groupFormat, 1, memory_heap::gpu_only, res_usage);
+                  resource_desc(desc.texture.width, desc.texture.height, 1, 1, groupFormat, 1, memory_heap::default_, res_usage);
 
                 const resource_usage initial_state =
                   static_cast<GroupResourceType>(i) == GroupResourceType::RESOURCE_NATIVE_STAGING ? resource_usage::render_target : resource_usage::copy_dest;
@@ -245,7 +245,7 @@ void ToggleGroupResourceManager::CheckGroupBuffers(reshade::api::effect_runtime*
                 }
             } else if (static_cast<GroupResourceType>(i) == GroupResourceType::RESOURCE_CONSTANTS_COPY) {
                 if (!runtime->get_device()->create_resource(
-                      resource_desc(resources.target_description.buffer.size, memory_heap::gpu_to_cpu, resource_usage::copy_dest | resource_usage::copy_source),
+                      resource_desc(resources.target_description.buffer.size, memory_heap::readback, resource_usage::copy_dest | resource_usage::copy_source),
                       nullptr,
                       resource_usage::copy_dest,
                       &resources.res)) {

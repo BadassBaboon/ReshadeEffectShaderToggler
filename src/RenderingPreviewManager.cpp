@@ -24,7 +24,7 @@ void RenderingPreviewManager::RecordVulkanHuntedTarget(command_list* cmd_list, u
         return;
 
     device* device = cmd_list->get_device();
-    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& deviceData = (*device->get_private_data<DeviceDataContainer>());
 
     if (deviceData.current_runtime == nullptr || uiData.GetToggleGroupIdShaderEditing() < 0)
         return;
@@ -41,7 +41,7 @@ void RenderingPreviewManager::RecordVulkanHuntedTarget(command_list* cmd_list, u
     if (group.isRetired())
         return;
 
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
     const uint64_t previewAction = MATCH_PREVIEW_PS << stageIndex;
 
     const ResourceViewData activeTarget =
@@ -75,7 +75,7 @@ void RenderingPreviewManager::RecordVulkanHuntedTarget(command_list* cmd_list, u
 
     // Track explicit resource barriers between the suppressed draw and the next
     // render-pass boundary so the preview copy can restore the best-known usage.
-    cmd_list->get_private_data<state_tracking>().start_resource_barrier_tracking(activeTarget.resource, resource_usage::render_target);
+    (*cmd_list->get_private_data<state_tracking>()).start_resource_barrier_tracking(activeTarget.resource, resource_usage::render_target);
 }
 
 void RenderingPreviewManager::CaptureDeferredVulkanPreview(command_list* cmd_list) {
@@ -83,7 +83,7 @@ void RenderingPreviewManager::CaptureDeferredVulkanPreview(command_list* cmd_lis
         return;
 
     device* device = cmd_list->get_device();
-    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& deviceData = (*device->get_private_data<DeviceDataContainer>());
     HuntPreview& preview = deviceData.huntPreview;
 
     if (!preview.vulkan_capture_pending || preview.target == 0 || preview.vulkan_command_list != cmd_list)
@@ -94,7 +94,7 @@ void RenderingPreviewManager::CaptureDeferredVulkanPreview(command_list* cmd_lis
     preview.vulkan_capture_pending = false;
     deviceData.vulkanPreviewWorkPending.store(false, std::memory_order_release);
 
-    state_tracking& trackedState = cmd_list->get_private_data<state_tracking>();
+    state_tracking& trackedState = (*cmd_list->get_private_data<state_tracking>());
     resource_usage sourceUsage = trackedState.stop_resource_barrier_tracking(preview.target);
     if (sourceUsage == resource_usage::undefined)
         sourceUsage = resource_usage::render_target;
@@ -150,11 +150,11 @@ void RenderingPreviewManager::CancelDeferredVulkanPreview(device* device) {
     if (device == nullptr || device->get_api() != device_api::vulkan)
         return;
 
-    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    DeviceDataContainer& deviceData = (*device->get_private_data<DeviceDataContainer>());
     HuntPreview& preview = deviceData.huntPreview;
 
     if (preview.vulkan_capture_pending && preview.target != 0 && preview.vulkan_command_list != nullptr) {
-        preview.vulkan_command_list->get_private_data<state_tracking>().stop_resource_barrier_tracking(preview.target);
+        (*preview.vulkan_command_list->get_private_data<state_tracking>()).stop_resource_barrier_tracking(preview.target);
     }
 
     preview.vulkan_capture_pending = false;
@@ -168,8 +168,8 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
     }
 
     device* device = cmd_list->get_device();
-    CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
-    DeviceDataContainer& deviceData = device->get_private_data<DeviceDataContainer>();
+    CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
+    DeviceDataContainer& deviceData = (*device->get_private_data<DeviceDataContainer>());
 
     // Remove call location from queue
     commandListData.commandQueue &= ~(invocation << (callLocation * MATCH_DELIMITER));
@@ -178,7 +178,7 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
         return;
     }
 
-    RuntimeDataContainer& runtimeData = deviceData.current_runtime->get_private_data<RuntimeDataContainer>();
+    RuntimeDataContainer& runtimeData = (*deviceData.current_runtime->get_private_data<RuntimeDataContainer>());
 
     auto& groups = uiData.GetToggleGroups();
     auto groupIt = groups.find(uiData.GetToggleGroupIdShaderEditing());
@@ -239,7 +239,7 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
             // render target here). on_barrier() then follows any transitions the game makes before
             // we copy it, so we know its REAL state at copy time (e.g. HDR buffers get moved to
             // shader_resource for post-processing - assuming render_target there hangs the device).
-            cmd_list->get_private_data<state_tracking>().start_resource_barrier_tracking(active_target.resource, resource_usage::render_target);
+            (*cmd_list->get_private_data<state_tracking>()).start_resource_barrier_tracking(active_target.resource, resource_usage::render_target);
 
             deviceData.huntPreview.target = active_target.resource;
             deviceData.huntPreview.target_desc = desc;
@@ -278,7 +278,7 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
         // Real current state of the source on this command list. If unknown (capture happened on a
         // different command list, or no barrier was tracked), we can't safely transition+copy it,
         // so skip the preview rather than guess a state and hang the device.
-        const resource_usage rs_usage = cmd_list->get_private_data<state_tracking>().stop_resource_barrier_tracking(rs);
+        const resource_usage rs_usage = (*cmd_list->get_private_data<state_tracking>()).stop_resource_barrier_tracking(rs);
         if (rs_usage == resource_usage::undefined) {
             RestDiag::Log("preview skipped: source state unknown on this command list (can't safely copy)");
             deviceData.huntPreview.matched = true;
@@ -325,8 +325,8 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
                 reshade::api::resource_view bound_dsv = {0};
 
                 if (strict_copy) {
-                    bound_rtvs = cmd_list->get_private_data<state_tracking>().render_targets;
-                    bound_dsv = cmd_list->get_private_data<state_tracking>().depth_stencil;
+                    bound_rtvs = (*cmd_list->get_private_data<state_tracking>()).render_targets;
+                    bound_dsv = (*cmd_list->get_private_data<state_tracking>()).depth_stencil;
                     // Unbind render targets so we can safely transition them without DX12 validation errors
                     cmd_list->bind_render_targets_and_depth_stencil(0, nullptr, { 0 });
                     cmd_list->barrier(2, res2, before, during);
