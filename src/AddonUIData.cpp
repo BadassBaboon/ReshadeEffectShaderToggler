@@ -54,15 +54,15 @@ AddonUIData::AddonUIData(ShaderManager* pixelShaderManager, ShaderManager* verte
     _keyBindings[Keybind::PIXEL_SHADER_MARK] = VK_NUMPAD3;
     _keyBindings[Keybind::PIXEL_SHADER_MARKED_DOWN] = VK_NUMPAD1 | (VK_CONTROL << 8);
     _keyBindings[Keybind::PIXEL_SHADER_MARKED_UP] = VK_NUMPAD2 | (VK_CONTROL << 8);
-    _keyBindings[Keybind::PIXEL_SHADER_MARK_PREV] = VK_NUMPAD1 | (VK_SHIFT << 8);
-    _keyBindings[Keybind::PIXEL_SHADER_MARK_NEXT] = VK_NUMPAD2 | (VK_SHIFT << 8);
+    _keyBindings[Keybind::PIXEL_SHADER_MARK_PREV] = VK_NUMPAD1 | (VK_SHIFT << 16);
+    _keyBindings[Keybind::PIXEL_SHADER_MARK_NEXT] = VK_NUMPAD2 | (VK_SHIFT << 16);
     _keyBindings[Keybind::VERTEX_SHADER_DOWN] = VK_NUMPAD4;
     _keyBindings[Keybind::VERTEX_SHADER_UP] = VK_NUMPAD5;
     _keyBindings[Keybind::VERTEX_SHADER_MARK] = VK_NUMPAD6;
     _keyBindings[Keybind::VERTEX_SHADER_MARKED_DOWN] = VK_NUMPAD4 | (VK_CONTROL << 8);
     _keyBindings[Keybind::VERTEX_SHADER_MARKED_UP] = VK_NUMPAD5 | (VK_CONTROL << 8);
-    _keyBindings[Keybind::VERTEX_SHADER_MARK_PREV] = VK_NUMPAD4 | (VK_SHIFT << 8);
-    _keyBindings[Keybind::VERTEX_SHADER_MARK_NEXT] = VK_NUMPAD5 | (VK_SHIFT << 8);
+    _keyBindings[Keybind::VERTEX_SHADER_MARK_PREV] = VK_NUMPAD4 | (VK_SHIFT << 16);
+    _keyBindings[Keybind::VERTEX_SHADER_MARK_NEXT] = VK_NUMPAD5 | (VK_SHIFT << 16);
     _keyBindings[Keybind::COMPUTE_SHADER_DOWN] = 0;
     _keyBindings[Keybind::COMPUTE_SHADER_UP] = 0;
     _keyBindings[Keybind::COMPUTE_SHADER_MARK] = 0;
@@ -407,6 +407,15 @@ void AddonUIData::LoadShaderTogglerIniFile(const string& fileName)
         uint32_t keybinding = iniFile.GetUInt(KeybindNames[i], "Keybindings");
         if (keybinding != UINT_MAX)
         {
+            // Key layout is key | Ctrl << 8 | Shift << 16 | Alt << 24. Earlier builds stored the
+            // Mark + Previous/Next defaults with Shift in the Ctrl byte, which made them Ctrl+Numpad
+            // and collided with the Previous/Next marked shortcuts. Move exactly those values to Shift.
+            const bool markPrevNext = i == Keybind::PIXEL_SHADER_MARK_PREV || i == Keybind::PIXEL_SHADER_MARK_NEXT ||
+                                      i == Keybind::VERTEX_SHADER_MARK_PREV || i == Keybind::VERTEX_SHADER_MARK_NEXT;
+            if (markPrevNext && (keybinding >> 8) == VK_SHIFT)
+            {
+                keybinding = (keybinding & 0xFF) | (VK_SHIFT << 16);
+            }
             _keyBindings[i] = keybinding;
         }
     }
