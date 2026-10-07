@@ -153,6 +153,7 @@ class AddonUIData {
     bool _preventRuntimeReload = false;
     bool _diagnosticLogs = false;
     bool _showObservedDraws = true;
+    bool _livePreviewDX12 = false;
     std::filesystem::path _basePath;
     TabType _currentTab = TabType::TAB_NONE;
     std::atomic_bool _configDirty{ false };
@@ -248,6 +249,11 @@ class AddonUIData {
     bool GetPreventRuntimeReload() const { return _preventRuntimeReload; }
     void SetPreventRuntimeReload(bool reload) { if (_preventRuntimeReload != reload) { _preventRuntimeReload = reload; MarkConfigDirty(); } }
     bool GetShowObservedDraws() const { return _showObservedDraws; }
+    // The render target preview copies a live game target mid-frame. On D3D12 that has hung the GPU
+    // in some games (RDR1, also with v1.4.2), so it is opt-in there.
+    bool GetLivePreviewDX12() const { return _livePreviewDX12; }
+    void SetLivePreviewDX12(bool enabled) { if (_livePreviewDX12 != enabled) { _livePreviewDX12 = enabled; MarkConfigDirty(); } }
+    bool IsLivePreviewAllowed(reshade::api::device_api api) const { return api != reshade::api::device_api::d3d12 || _livePreviewDX12; }
     void SetShowObservedDraws(bool show) { if (_showObservedDraws != show) { _showObservedDraws = show; MarkConfigDirty(); } }
 
     void AssignPreferredGroupTechniques(std::unordered_map<std::string, EffectData>& allTechniques);

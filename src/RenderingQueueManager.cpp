@@ -57,7 +57,8 @@ void RenderingQueueManager::_CheckCallForCommandList(ShaderData& sData,
                 }
 
                 if (group->getId() == uiData.GetToggleGroupIdShaderEditing() && !deviceData.huntPreview.matched) {
-                    if (uiData.GetCurrentTabType() == AddonImGui::TAB_RENDER_TARGET) {
+                    if (uiData.GetCurrentTabType() == AddonImGui::TAB_RENDER_TARGET &&
+                    deviceData.current_runtime != nullptr && uiData.IsLivePreviewAllowed(deviceData.current_runtime->get_device()->get_api())) {
                         if (group->getRenderToResourceViews() || autoSceneColour) {
                             queue_mask |= match_preview << (CALL_DRAW * MATCH_DELIMITER);
                             deviceData.huntPreview.target_invocation_location = CALL_DRAW;
@@ -176,7 +177,8 @@ void RenderingQueueManager::_RescheduleGroups(ShaderData& sData, CommandListData
             queue_mask |= (match_effect << (group->getInvocationLocation() * MATCH_DELIMITER)) | (match_effect << (CALL_DRAW * MATCH_DELIMITER));
 
             if (group->getId() == uiData.GetToggleGroupIdShaderEditing() && !deviceData.huntPreview.matched && deviceData.huntPreview.target == 0) {
-                if (uiData.GetCurrentTabType() == AddonImGui::TAB_RENDER_TARGET) {
+                if (uiData.GetCurrentTabType() == AddonImGui::TAB_RENDER_TARGET &&
+                    deviceData.current_runtime != nullptr && uiData.IsLivePreviewAllowed(deviceData.current_runtime->get_device()->get_api())) {
                     queue_mask |= (match_preview << (group->getInvocationLocation() * MATCH_DELIMITER)) | (match_preview << (CALL_DRAW * MATCH_DELIMITER));
 
                     deviceData.huntPreview.target_invocation_location = group->getInvocationLocation();
@@ -192,7 +194,8 @@ void RenderingQueueManager::_RescheduleGroups(ShaderData& sData, CommandListData
             queue_mask |= (match_binding << (group->getInvocationLocation() * MATCH_DELIMITER)) | (match_binding << (CALL_DRAW * MATCH_DELIMITER));
 
             if (group->getId() == uiData.GetToggleGroupIdShaderEditing() && !deviceData.huntPreview.matched && deviceData.huntPreview.target == 0) {
-                if (uiData.GetCurrentTabType() == AddonImGui::TAB_RENDER_TARGET) {
+                if (uiData.GetCurrentTabType() == AddonImGui::TAB_RENDER_TARGET &&
+                    deviceData.current_runtime != nullptr && uiData.IsLivePreviewAllowed(deviceData.current_runtime->get_device()->get_api())) {
                     queue_mask |= (match_preview << (group->getInvocationLocation() * MATCH_DELIMITER)) | (match_preview << (CALL_DRAW * MATCH_DELIMITER));
 
                     deviceData.huntPreview.target_invocation_location = group->getInvocationLocation();

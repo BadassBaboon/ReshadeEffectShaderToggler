@@ -400,6 +400,7 @@ void AddonUIData::LoadShaderTogglerIniFile(const string& fileName)
     if (_diagnosticLogs)
         reshade::log::message(reshade::log::level::info, "[REST] DiagnosticLogs enabled: REST will log detailed rendering diagnostics.");
     _showObservedDraws = iniFile.GetBoolOrDefault("ShowObservedDraws", "General", true);
+    _livePreviewDX12 = iniFile.GetBoolOrDefault("LivePreviewDX12", "General", false);
 
     for (uint32_t i = 0; i < ARRAYSIZE(KeybindNames); i++)
     {
@@ -480,6 +481,7 @@ void AddonUIData::SaveShaderTogglerIniFile(const string& fileName)
     iniFile.SetBool("PreventRuntimeReload", _preventRuntimeReload, "", "General");
     iniFile.SetBool("DiagnosticLogs", _diagnosticLogs, "", "General");
     iniFile.SetBool("ShowObservedDraws", _showObservedDraws, "", "General");
+    iniFile.SetBool("LivePreviewDX12", _livePreviewDX12, "", "General");
 
     for (uint32_t i = 0; i < ARRAYSIZE(KeybindNames); i++)
     {

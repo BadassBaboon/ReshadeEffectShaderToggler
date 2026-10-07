@@ -694,6 +694,22 @@ static void DisplayPreview(AddonImGui::AddonUIData& instance,
     bool clearAlpha = group->getClearPreviewAlpha();
     const bool vulkan = runtime->get_device()->get_api() == reshade::api::device_api::vulkan;
 
+    if (runtime->get_device()->get_api() == reshade::api::device_api::d3d12) {
+        bool livePreview = instance.GetLivePreviewDX12();
+        if (DrawToggleRow("Live preview (DX12)", &livePreview,
+                          "Copies the hunted shader's render target every frame for this preview.\n"
+                          "Some DX12 games (e.g. Red Dead Redemption) hang the GPU when their targets are copied mid-frame.\n"
+                          "Hunting and marking work without it.",
+                          livePreview ? "If the game freezes while hunting, turn this off." : "Off by default on DX12: it can freeze some games.",
+                          RFX_CARD_PAD)) {
+            instance.SetLivePreviewDX12(livePreview);
+        }
+        if (!livePreview) {
+            group->setClearPreviewAlpha(clearAlpha);
+            return;
+        }
+    }
+
     if (vulkan)
         ImGui::BeginDisabled();
     DrawToggleRow("Clear alpha channel", &clearAlpha,
@@ -2817,6 +2833,14 @@ static void DrawCategoryOptions(AddonImGui::AddonUIData& instance, reshade::api:
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
+
+        bool livePreviewDX12 = instance.GetLivePreviewDX12();
+        if (DrawToggleRow("Live render target preview on DX12", &livePreviewDX12,
+                          "Copies the hunted shader's render target every frame for the Render targets preview.\n"
+                          "Some DX12 games (e.g. Red Dead Redemption) hang the GPU when their targets are copied mid-frame.",
+                          "Default: Off")) {
+            instance.SetLivePreviewDX12(livePreviewDX12);
+        }
 
         bool showDraws = instance.GetShowObservedDraws();
         if (DrawToggleRow("Show observed draw calls during hunting", &showDraws,
