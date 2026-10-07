@@ -694,7 +694,14 @@ static void DisplayPreview(AddonImGui::AddonUIData& instance,
           previewChannel == 3 ? ImVec4(0.0f, 0.0f, 1.0f, 1.0f) :
                                 ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 
-        if (ImGui::BeginChild("RTPreview##preview", ImVec2(0, 240.0f), true, ImGuiWindowFlags_None)) {
+        const float availPreviewW = std::max(200.0f, ImGui::GetContentRegionAvail().x - RFX_CARD_PAD);
+        float desiredPreviewH = 340.0f;
+        if (deviceData.huntPreview.width > 0 && deviceData.huntPreview.height > 0) {
+            const float aspect = static_cast<float>(deviceData.huntPreview.height) / static_cast<float>(deviceData.huntPreview.width);
+            desiredPreviewH = std::clamp(availPreviewW * aspect, 280.0f, 540.0f);
+        }
+
+        if (ImGui::BeginChild("RTPreview##preview", ImVec2(-RFX_CARD_PAD, desiredPreviewH), true, ImGuiWindowFlags_None)) {
             DrawPreview(srv.handle, deviceData.huntPreview.width, deviceData.huntPreview.height, previewTint);
         }
         ImGui::EndChild();
@@ -728,7 +735,14 @@ static void DisplayBindingPreview(AddonImGui::AddonUIData& instance,
                     groupResource.target_description.texture.height);
         ImGui::Separator();
 
-        if (ImGui::BeginChild("BindingPreview##preview", ImVec2(0, 240.0f), true, ImGuiWindowFlags_None)) {
+        const float availPreviewW = std::max(200.0f, ImGui::GetContentRegionAvail().x - RFX_CARD_PAD);
+        float desiredPreviewH = 340.0f;
+        if (groupResource.target_description.texture.width > 0 && groupResource.target_description.texture.height > 0) {
+            const float aspect = static_cast<float>(groupResource.target_description.texture.height) / static_cast<float>(groupResource.target_description.texture.width);
+            desiredPreviewH = std::clamp(availPreviewW * aspect, 280.0f, 540.0f);
+        }
+
+        if (ImGui::BeginChild("BindingPreview##preview", ImVec2(-RFX_CARD_PAD, desiredPreviewH), true, ImGuiWindowFlags_None)) {
             DrawPreview(res_view.handle, groupResource.target_description.texture.width, groupResource.target_description.texture.height);
         }
         ImGui::EndChild();
@@ -2380,10 +2394,14 @@ static void DrawCategoryGroups(AddonImGui::AddonUIData& instance, reshade::api::
                 ImGui::TextColored(rfx_accent(), "Configure Group #%d", group.getId());
                 ImGui::Spacing();
 
-                if (ImGui::BeginTable("##group_edit_fields", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody)) {
-                    const float labelColWidth = std::max(180.0f, ImGui::CalcTextSize("Keyboard Shortcut:").x + 20.0f);
-                    ImGui::TableSetupColumn("##field_lbl", ImGuiTableColumnFlags_WidthFixed, labelColWidth);
-                    ImGui::TableSetupColumn("##field_val", ImGuiTableColumnFlags_WidthStretch);
+                const float clearBtnW = std::max(56.0f, ImGui::CalcTextSize("Clear").x + ImGui::GetStyle().FramePadding.x * 2.0f + 12.0f);
+                const float inputW = 200.0f;
+                const float spacing = ImGui::GetStyle().ItemSpacing.x;
+                const float totalFieldW = inputW + spacing + clearBtnW;
+
+                if (ImGui::BeginTable("##group_edit_fields", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoBordersInBody, ImVec2(-RFX_CARD_PAD, 0.0f))) {
+                    ImGui::TableSetupColumn("##field_lbl", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("##field_val", ImGuiTableColumnFlags_WidthFixed, totalFieldW);
 
                     // Name field
                     ImGui::TableNextRow();
@@ -2394,7 +2412,7 @@ static void DrawCategoryGroups(AddonImGui::AddonUIData& instance, reshade::api::
                     char tmpBuffer[150] = {};
                     const std::string name = group.getName();
                     strncpy_s(tmpBuffer, 150, name.c_str(), name.size());
-                    ImGui::SetNextItemWidth(std::min(320.0f, ImGui::GetContentRegionAvail().x));
+                    ImGui::SetNextItemWidth(-1.0f);
                     if (ImGui::InputText("##Name", tmpBuffer, 149)) {
                         group.setName(tmpBuffer);
                         instance.MarkConfigDirty();
@@ -2407,11 +2425,17 @@ static void DrawCategoryGroups(AddonImGui::AddonUIData& instance, reshade::api::
                     ImGui::TextUnformatted("Keyboard Shortcut:");
                     ImGui::TableNextColumn();
                     uint32_t keys = group.getToggleKey();
-                    ImGui::SetNextItemWidth(std::min(320.0f, ImGui::GetContentRegionAvail().x));
-                    if (key_input_box(ShaderToggler::reshade_key_name(keys).c_str(), &keys, runtime)) {
+                    ImGui::SetNextItemWidth(inputW);
+                    if (key_input_box("##KbShortcut", &keys, runtime)) {
                         group.setToggleKey(keys);
                         instance.MarkConfigDirty();
                     }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Clear##ClearKbGroup", ImVec2(clearBtnW, 0))) {
+                        group.setToggleKey(0);
+                        instance.MarkConfigDirty();
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Clear keyboard shortcut");
 
                     // Gamepad Shortcut
                     ImGui::TableNextRow();
@@ -2420,16 +2444,17 @@ static void DrawCategoryGroups(AddonImGui::AddonUIData& instance, reshade::api::
                     ImGui::TextUnformatted("Gamepad Shortcut:");
                     ImGui::TableNextColumn();
                     uint32_t gpShortcut = group.getGamepadShortcut();
-                    ImGui::SetNextItemWidth(std::min(240.0f, ImGui::GetContentRegionAvail().x - 60.0f));
+                    ImGui::SetNextItemWidth(inputW);
                     if (gamepad_input_box("##PadShortcut", &gpShortcut)) {
                         group.setGamepadShortcut(gpShortcut);
                         instance.MarkConfigDirty();
                     }
                     ImGui::SameLine();
-                    if (ImGui::Button("Clear##ClearPadGroup")) {
+                    if (ImGui::Button("Clear##ClearPadGroup", ImVec2(clearBtnW, 0))) {
                         group.setGamepadShortcut(0);
                         instance.MarkConfigDirty();
                     }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Clear gamepad shortcut");
 
                     ImGui::EndTable();
                 }
@@ -2621,16 +2646,29 @@ static void DrawCategoryKeybindings(AddonImGui::AddonUIData& instance, reshade::
         ImGui::Spacing();
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Toggle ALL groups on/off (Pad):");
-        ImGui::SameLine(240.0f);
-        ImGui::SetNextItemWidth(240.0f);
+
+        const float avail = ImGui::GetContentRegionAvail().x;
+        const float clearBtnW = std::max(56.0f, ImGui::CalcTextSize("Clear").x + ImGui::GetStyle().FramePadding.x * 2.0f + 12.0f);
+        const float inputW = 200.0f;
+        const float spacing = ImGui::GetStyle().ItemSpacing.x;
+        const float totalW = inputW + spacing + clearBtnW;
+        const float ctrl_x = ImGui::GetCursorPosX() + avail - totalW - RFX_CARD_PAD;
+        if (ctrl_x > ImGui::GetCursorPosX()) {
+            ImGui::SameLine(ctrl_x);
+        } else {
+            ImGui::SameLine();
+        }
+
+        ImGui::SetNextItemWidth(inputW);
         uint32_t gpToggleAll = instance.GetGamepadToggleAll();
         if (gamepad_input_box("##ToggleAllGp", &gpToggleAll)) {
             instance.SetGamepadToggleAll(gpToggleAll);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Clear##ClearGpToggleAll")) {
+        if (ImGui::Button("Clear##ClearGpToggleAll", ImVec2(clearBtnW, 0))) {
             instance.SetGamepadToggleAll(0);
         }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Clear gamepad shortcut");
         EndCard();
     }
 
@@ -2677,22 +2715,36 @@ static void DrawCategoryKeybindings(AddonImGui::AddonUIData& instance, reshade::
 }
 
 static void DrawCategoryOptions(AddonImGui::AddonUIData& instance, reshade::api::effect_runtime* runtime) {
-    if (BeginCard("##opt_hunting", "SHADER HUNTING & SELECTION")) {
+    auto DrawRightAlignedRow = [](const char* label, const char* tooltip, auto drawControl, float ctrlW = 220.0f) {
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Overlay opacity:");
-        ImGui::SameLine(220.0f);
-        ImGui::SetNextItemWidth(260.0f);
-        if (ImGui::SliderFloat("##OverlayOpacity", instance.OverlayOpacity(), 0.0f, 1.0f))
-            instance.MarkConfigDirty();
+        ImGui::TextUnformatted(label);
+        if (tooltip && ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", tooltip);
 
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("# of frames to collect:");
-        ImGui::SameLine(220.0f);
-        ImGui::SetNextItemWidth(260.0f);
-        if (ImGui::SliderInt("##FramesToCollect", instance.StartValueFramecountCollectionPhase(), 10, 1000))
-            instance.MarkConfigDirty();
-        ImGui::SameLine();
-        ShowHelpMarker("The number of frames the addon will collect active shaders. Set this to a high number if the shader you want to mark is only used occasionally.");
+        const float avail = ImGui::GetContentRegionAvail().x;
+        const float ctrl_x = ImGui::GetCursorPosX() + avail - ctrlW - RFX_CARD_PAD;
+        if (ctrl_x > ImGui::GetCursorPosX()) {
+            ImGui::SameLine(ctrl_x);
+        } else {
+            ImGui::SameLine();
+        }
+        ImGui::SetNextItemWidth(ctrlW);
+        drawControl();
+        if (tooltip && ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", tooltip);
+        ImGui::Spacing();
+    };
+
+    if (BeginCard("##opt_hunting", "SHADER HUNTING & SELECTION")) {
+        DrawRightAlignedRow("Overlay opacity:", "Opacity of the shader hunting overlay window.", [&]() {
+            if (ImGui::SliderFloat("##OverlayOpacity", instance.OverlayOpacity(), 0.0f, 1.0f))
+                instance.MarkConfigDirty();
+        });
+
+        DrawRightAlignedRow("# of frames to collect:", "The number of frames the addon will collect active shaders. Set this to a high number if the shader you want to mark is only used occasionally.", [&]() {
+            if (ImGui::SliderInt("##FramesToCollect", instance.StartValueFramecountCollectionPhase(), 10, 1000))
+                instance.MarkConfigDirty();
+        });
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -2700,8 +2752,8 @@ static void DrawCategoryOptions(AddonImGui::AddonUIData& instance, reshade::api:
 
         bool showDraws = instance.GetShowObservedDraws();
         if (DrawToggleRow("Show observed draw calls during hunting", &showDraws,
-                          "Displays the observed draw calls and geometry count (vertices / indices) for the currently selected hunted shader in the settings window.\nOff by default so the shader list stays completely visible.",
-                          "Default: Off")) {
+                          "Displays the observed draw calls and geometry count (vertices / indices) for the currently selected hunted shader in the settings window.",
+                          "Default: On")) {
             instance.SetShowObservedDraws(showDraws);
         }
 
@@ -2709,38 +2761,34 @@ static void DrawCategoryOptions(AddonImGui::AddonUIData& instance, reshade::api:
     }
 
     if (BeginCard("##opt_pipeline", "PIPELINE & RESOURCE COMPATIBILITY")) {
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Resource Shim:");
-        ImGui::SameLine(220.0f);
         std::string varSelectedItem = instance.GetResourceShim();
-        ImGui::SetNextItemWidth(260.0f);
-        if (ImGui::BeginCombo("##ResourceShim", varSelectedItem.c_str(), ImGuiComboFlags_None)) {
-            for (auto& v : Rendering::ResourceShimNames) {
-                bool is_selected = (varSelectedItem == v);
-                if (ImGui::Selectable(v.c_str(), is_selected)) {
-                    varSelectedItem = v;
+        DrawRightAlignedRow("Resource Shim:", "GPU resource shim to use for target capture.", [&]() {
+            if (ImGui::BeginCombo("##ResourceShim", varSelectedItem.c_str(), ImGuiComboFlags_None)) {
+                for (auto& v : Rendering::ResourceShimNames) {
+                    bool is_selected = (varSelectedItem == v);
+                    if (ImGui::Selectable(v.c_str(), is_selected)) {
+                        varSelectedItem = v;
+                    }
+                    if (is_selected) ImGui::SetItemDefaultFocus();
                 }
-                if (is_selected) ImGui::SetItemDefaultFocus();
+                ImGui::EndCombo();
             }
-            ImGui::EndCombo();
-        }
+        });
         instance.SetResourceShim(varSelectedItem);
 
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Constant Buffer Copy Method:");
-        ImGui::SameLine(220.0f);
         std::string varSelectedCopyMethod = instance.GetConstHookCopyType();
-        ImGui::SetNextItemWidth(260.0f);
-        if (ImGui::BeginCombo("##ConstCopyType", varSelectedCopyMethod.c_str(), ImGuiComboFlags_None)) {
-            for (auto& v : Shim::Constants::ConstantCopyTypeNames) {
-                bool is_selected = (varSelectedCopyMethod == v);
-                if (ImGui::Selectable(v.c_str(), is_selected)) {
-                    varSelectedCopyMethod = v;
+        DrawRightAlignedRow("Constant Buffer Copy Method:", "Intercept method for capturing constant buffer data.", [&]() {
+            if (ImGui::BeginCombo("##ConstCopyType", varSelectedCopyMethod.c_str(), ImGuiComboFlags_None)) {
+                for (auto& v : Shim::Constants::ConstantCopyTypeNames) {
+                    bool is_selected = (varSelectedCopyMethod == v);
+                    if (ImGui::Selectable(v.c_str(), is_selected)) {
+                        varSelectedCopyMethod = v;
+                    }
+                    if (is_selected) ImGui::SetItemDefaultFocus();
                 }
-                if (is_selected) ImGui::SetItemDefaultFocus();
+                ImGui::EndCombo();
             }
-            ImGui::EndCombo();
-        }
+        });
         instance.SetConstHookCopyType(varSelectedCopyMethod);
 
         ImGui::Spacing();
@@ -2953,7 +3001,9 @@ static void DisplayAddonsTab(AddonImGui::AddonUIData& instance, reshade::api::ef
 
     ImGui::Spacing();
     ImGui::TextWrapped("REST now has its own dedicated tab ('REST') docked at the top of the ReShade overlay window.");
-    ImGui::TextDisabled("All toggle groups, shader hunting, keybindings, and options are configured there.");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("All toggle groups, shader hunting, keybindings, and options are configured there.");
+    ImGui::PopStyleColor();
     ImGui::Spacing();
 
     if (BeginCard("##quick_status", "QUICK OVERVIEW")) {

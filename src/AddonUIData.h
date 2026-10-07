@@ -151,7 +151,7 @@ class AddonUIData {
     std::string _resourceShim = "none";
     bool _trackDescriptors = true;
     bool _preventRuntimeReload = false;
-    bool _showObservedDraws = false;
+    bool _showObservedDraws = true;
     std::filesystem::path _basePath;
     TabType _currentTab = TabType::TAB_NONE;
     std::atomic_bool _configDirty{ false };

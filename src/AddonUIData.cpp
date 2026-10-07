@@ -382,7 +382,7 @@ void AddonUIData::LoadShaderTogglerIniFile(const string& fileName)
     }
 
     _preventRuntimeReload = iniFile.GetBoolOrDefault("PreventRuntimeReload", "General", false);
-    _showObservedDraws = iniFile.GetBoolOrDefault("ShowObservedDraws", "General", false);
+    _showObservedDraws = iniFile.GetBoolOrDefault("ShowObservedDraws", "General", true);
 
     for (uint32_t i = 0; i < ARRAYSIZE(KeybindNames); i++)
     {
