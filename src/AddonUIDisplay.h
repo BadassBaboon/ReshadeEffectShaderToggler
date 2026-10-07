@@ -1539,6 +1539,9 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
     ImGui::Separator();
 
     const uint32_t selectedHash = shaderManager->getActiveHuntedShaderHash();
+    // Last selection the list scrolled to. Selections made from the list itself are recorded here
+    // directly, so only hotkey/button navigation scrolls the list.
+    static uint32_t s_lastScrolledHash = 0;
 
     std::string needle(shaderSearch);
     std::transform(needle.begin(), needle.end(), needle.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -1599,6 +1602,8 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
                 const bool focusNavigated = ImGui::IsItemFocused() && selectedHash != hash &&
                                             (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_DownArrow));
                 if ((clicked || focusNavigated) && shaderManager->setActiveHuntedShaderHash(hash)) {
+                    // The row is already on screen when picked with the mouse or arrow keys; don't re-center it.
+                    s_lastScrolledHash = hash;
                     instance.UpdateToggleGroupsForShaderHashes();
                 }
 
@@ -1637,7 +1642,6 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
                 ImGui::TableSetColumnIndex(0);
                 drawHash(visibleHashes[static_cast<size_t>(row)]);
                 // Keep the selection in view when it changes via hotkeys or the nav buttons.
-                static uint32_t s_lastScrolledHash = 0;
                 if (row == selectedRow && s_lastScrolledHash != selectedHash) {
                     ImGui::SetScrollHereY(0.5f);
                     s_lastScrolledHash = selectedHash;
