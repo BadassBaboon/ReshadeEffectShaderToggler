@@ -32,6 +32,7 @@
 #include "AddonUIData.h"
 #include "AddonUIDisplay.h"
 #include "CDataFile.h"
+#include "DiagnosticLog.h"
 #include "ConstantManager.h"
 #include "KeyMonitor.h"
 #include "PipelinePrivateData.h"
@@ -53,6 +54,7 @@
 #include <format>
 #include <fstream>
 #include <functional>
+#include <optional>
 #include <imgui.h>
 #include <reshade.hpp>
 #include <set>
@@ -191,6 +193,10 @@ static void onDestroyResourceView(device* device, resource_view view) {
 }
 
 static void onReshadeReloadedEffects(effect_runtime* runtime) {
+    RestDiag::Count(RestDiag::g_counters.effectReloads);
+    RestDiag::Log("ReShade reloaded effects");
+    RestDiag::RequestDetail();
+
     RuntimeDataContainer& runtimeData = runtime->get_private_data<RuntimeDataContainer>();
     DeviceDataContainer& deviceData = runtime->get_device()->get_private_data<DeviceDataContainer>();
 
@@ -532,6 +538,19 @@ static void onBeginRenderPass(command_list* cmd_list, uint32_t count, const rend
         if (commandListData.commandQueue & Rendering::CHECK_MATCH_DRAW_EFFECT) {
             renderingEffectManager.RenderEffects(cmd_list, Rendering::CALL_DRAW, Rendering::MATCH_EFFECT_PS | Rendering::MATCH_EFFECT_VS);
         }
+        return;
+    }
+
+    // D3D12 (and other APIs with render passes): flush work queued for the upcoming draw here,
+    // before the game's render pass opens. If it waits until the draw, ReShade's own passes,
+    // barriers and copies end up nested inside the game's open render pass, which on RDR1 (D3D12)
+    // cost ~50 ms of GPU time per frame. This is the pre-port behaviour, restored.
+    if (commandListData.commandQueue & Rendering::CHECK_MATCH_DRAW_BINDING) {
+        renderingBindingManager.UpdateTextureBindings(cmd_list, Rendering::CALL_DRAW, Rendering::MATCH_BINDING_PS | Rendering::MATCH_BINDING_VS);
+    }
+
+    if (commandListData.commandQueue & Rendering::CHECK_MATCH_DRAW_EFFECT) {
+        renderingEffectManager.RenderEffects(cmd_list, Rendering::CALL_DRAW, Rendering::MATCH_EFFECT_PS | Rendering::MATCH_EFFECT_VS);
     }
 }
 
@@ -584,6 +603,9 @@ static void onPresent(command_queue* queue,
 }
 
 static void onReshadePresent(effect_runtime* runtime) {
+    std::optional<RestDiag::ScopedCpuTimer> presentTimer;
+    if (RestDiag::Enabled())
+        presentTimer.emplace(RestDiag::g_counters.presentCpuMicros);
     device* dev = runtime->get_device();
     DeviceDataContainer& deviceData = dev->get_private_data<DeviceDataContainer>();
     command_queue* queue = runtime->get_command_queue();
@@ -617,6 +639,24 @@ static void onReshadePresent(effect_runtime* runtime) {
     deviceData.huntPreview.Reset();
 
     CheckHotkeys(g_addonUIData, runtime);
+
+    if (RestDiag::Enabled()) {
+        // Log group activation changes (from hotkeys, gamepad or the UI) and capture the next few
+        // frames in detail, since that is when frame-time problems usually start.
+        static std::string s_lastActive;
+        std::string active;
+        for (const auto& [_, group] : g_addonUIData.GetToggleGroups()) {
+            if (group.isActive())
+                active += std::format("'{}'(id {}) ", group.getName(), group.getId());
+        }
+        if (active != s_lastActive) {
+            RestDiag::Log("active groups changed: {}", active.empty() ? "none" : active);
+            s_lastActive = active;
+            RestDiag::RequestDetail();
+        }
+    }
+    presentTimer.reset();
+    RestDiag::OnPresent();
 }
 
 static void onMapBufferRegion(device* device, resource resource, uint64_t offset, uint64_t size, map_access access, void** data) {

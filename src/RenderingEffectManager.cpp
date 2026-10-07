@@ -1,4 +1,5 @@
 #include "RenderingEffectManager.h"
+#include "DiagnosticLog.h"
 #include "StateTracking.h"
 #include "Util.h"
 
@@ -57,23 +58,6 @@ static reshade::api::format GetBackBufferTypelessFormat(effect_runtime* runtime)
     if (backBuffer == 0)
         return reshade::api::format::unknown;
     return format_to_typeless(runtime->get_device()->get_resource_desc(backBuffer).texture.format);
-}
-
-// Staging a target in the swapchain format clamps values outside that format's range (e.g. HDR
-// highlights above 1.0 in a float target). Log it once per group and format.
-static void LogFormatStaging(const ToggleGroup* group, reshade::api::format targetFormat, reshade::api::format backBufferFormat) {
-    // Called with render_mutex held exclusively.
-    static unordered_set<uint64_t> s_logged;
-    const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(group->getId())) << 32) | static_cast<uint32_t>(targetFormat);
-    if (!s_logged.insert(key).second)
-        return;
-
-    reshade::log::message(reshade::log::level::info,
-      std::format("[REST] Group '{}' targets a {} buffer; effects run on a {} staging copy to match the swapchain "
-                  "(rendering into it directly makes ReShade stall the GPU twice per frame). Values outside the swapchain range are clamped.",
-                  group->getName(),
-                  RenderingManager::FormatName(targetFormat),
-                  RenderingManager::FormatName(backBufferFormat)).c_str());
 }
 
 bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
@@ -157,15 +141,12 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
           !autoSceneColour && !group->getRenderToResourceViews() &&
           desc.texture.samples <= 1 && desc.type == resource_type::texture_2d &&
           (deviceApi == device_api::d3d10 || deviceApi == device_api::d3d11 || deviceApi == device_api::d3d12);
-        // A format that differs from the swapchain (e.g. a 16-bit float scene buffer on an 8-bit
-        // swapchain) triggers the same per-frame rebuild, so stage those in the swapchain format.
-        // Vulkan stages through image blits, which don't convert formats, so it keeps the size-only rule.
+        // A format different from the swapchain's is rendered directly: ReShade 6.x keeps a cached
+        // effect permutation per target format, and staging it in the swapchain format would clamp HDR.
         const reshade::api::format backBufferFormat = GetBackBufferTypelessFormat(runtime);
-        const reshade::api::format targetTypeless = format_to_typeless(desc.texture.format);
         const bool formatMismatch =
-          deviceApi != device_api::vulkan &&
-          backBufferFormat != reshade::api::format::unknown && targetTypeless != backBufferFormat;
-        const bool wantsNativeStaging = (offSizeTarget || formatMismatch) && (autoSceneColour || manualStagingSupported);
+          backBufferFormat != reshade::api::format::unknown && format_to_typeless(desc.texture.format) != backBufferFormat;
+        const bool wantsNativeStaging = offSizeTarget && (autoSceneColour || manualStagingSupported);
         const bool vulkanAutoSceneColour = autoSceneColour && deviceApi == device_api::vulkan;
         const bool vulkanNativeStaging = vulkanAutoSceneColour && wantsNativeStaging;
         resource_usage vulkanTargetUsage = resource_usage::render_target;
@@ -252,7 +233,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
             desired.texture.depth_or_layers = 1;
             desired.texture.levels = 1;
             desired.texture.samples = 1;
-            desired.texture.format = formatMismatch ? backBufferFormat : format_to_typeless(active_resource.format);
+            desired.texture.format = format_to_typeless(active_resource.format);
 
             bool stagingCompatible = false;
             if (staging.res != 0) {
@@ -265,9 +246,12 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
 
             if (!stagingCompatible) {
                 staging.target_description = desired;
-                staging.view_format = formatMismatch ? format_to_default_typed(backBufferFormat, 0) : active_resource.format;
-                if (formatMismatch)
-                    LogFormatStaging(group, targetTypeless, backBufferFormat);
+                staging.view_format = active_resource.format;
+                RestDiag::Log("group '{}' requests a staging buffer {}x{} {} (game target {}x{} {})",
+                              group->getName(), desired.texture.width, desired.texture.height,
+                              RenderingManager::FormatName(desired.texture.format),
+                              desc.texture.width, desc.texture.height, RenderingManager::FormatName(desc.texture.format));
+                RestDiag::Count(RestDiag::g_counters.skippedRenders);
                 staging.state = GroupResourceState::RESOURCE_INVALID;
                 continue;
             }
@@ -280,6 +264,9 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                                                        &nativeStageSRV);
 
             if (nativeStageRes == 0 || nativeStageRTV == 0 || view->rtv == 0) {
+                RestDiag::Detail("group '{}' skipped: staging handles missing (res={} rtv={} target rtv={})",
+                                 group->getName(), nativeStageRes.handle, nativeStageRTV.handle, view->rtv.handle);
+                RestDiag::Count(RestDiag::g_counters.skippedRenders);
                 continue;
             }
 
@@ -300,6 +287,9 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                 cmd_list->barrier(nativeStageRes, resource_usage::copy_dest, resource_usage::render_target);
             } else {
                 if (nativeStageSRV == 0 || view->srv == 0) {
+                    RestDiag::Detail("group '{}' skipped: staging srv={} target srv={}",
+                                     group->getName(), nativeStageSRV.handle, view->srv.handle);
+                    RestDiag::Count(RestDiag::g_counters.skippedRenders);
                     continue;
                 }
 
@@ -311,6 +301,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                 // Upscale the game's pre-DLSS scene into a native-size scratch surface.
                 // This keeps ReShade's effect-created intermediate textures at their normal
                 // runtime dimensions, avoiding mixed-resolution shared-resource permutations.
+                RestDiag::ScopedCpuTimer stagingTimer(RestDiag::g_counters.stagingCpuMicros);
                 shaderManager.CopyResource(cmd_list, view->srv, nativeStageRTV, runtimeWidth, runtimeHeight);
             }
 
@@ -379,7 +370,38 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         }
 
         if (view_non_srgb == 0) {
+            RestDiag::Detail("group '{}' skipped: no render target view", group->getName());
+            RestDiag::Count(RestDiag::g_counters.skippedRenders);
             continue;
+        }
+
+        if (RestDiag::Enabled()) {
+            // What render_technique will actually receive. Any mismatch with the swapchain here makes
+            // ReShade rebuild its back-buffer copy (and possibly reload effects) on this call.
+            device* dev = runtime->get_device();
+            const resource effectRes = dev->get_resource_from_view(view_non_srgb);
+            const resource_desc effectDesc = dev->get_resource_desc(effectRes);
+            const resource_view_desc effectViewDesc = dev->get_resource_view_desc(view_non_srgb);
+            const bool effectMismatch =
+              effectDesc.texture.width != runtimeWidth || effectDesc.texture.height != runtimeHeight ||
+              format_to_typeless(effectDesc.texture.format) != backBufferFormat;
+
+            RestDiag::Count(useNativeStaging ? RestDiag::g_counters.stagedRenders : RestDiag::g_counters.directRenders);
+            if (effectMismatch)
+                RestDiag::Count(RestDiag::g_counters.mismatchedDirectRenders);
+
+            RestDiag::Detail("render group '{}' ({} technique(s)) | game target {}x{} {} view {} | swapchain {}x{} {} | "
+                             "offSize={} formatMismatch={} staging={} preserveAlpha={} auto={} renderToSRV={} | "
+                             "effect target {}x{} {} view {}{}",
+                             group->getName(), effectList.size(),
+                             desc.texture.width, desc.texture.height, RenderingManager::FormatName(desc.texture.format),
+                             RenderingManager::FormatName(active_resource.format),
+                             runtimeWidth, runtimeHeight, RenderingManager::FormatName(backBufferFormat),
+                             offSizeTarget, formatMismatch, useNativeStaging, preserveTargetAlpha, autoSceneColour,
+                             group->getRenderToResourceViews(),
+                             effectDesc.texture.width, effectDesc.texture.height, RenderingManager::FormatName(effectDesc.texture.format),
+                             RenderingManager::FormatName(effectViewDesc.format),
+                             effectMismatch ? " | MISMATCH: ReShade will rebuild its back-buffer copy" : "");
         }
 
         const bool restoreVulkanDirectTarget =
@@ -409,10 +431,20 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                 renderedTechniqueOrder += techniqueName;
             }
 
-            runtime->render_technique(effectTech->technique, cmd_list, view_non_srgb, view_srgb);
+            {
+                RestDiag::ScopedCpuTimer techniqueTimer(RestDiag::g_counters.techniqueCpuMicros, &RestDiag::g_counters.techniqueCpuMaxMicros);
+                runtime->render_technique(effectTech->technique, cmd_list, view_non_srgb, view_srgb);
+                if (RestDiag::DetailEnabled()) {
+                    char diagName[256] = {};
+                    size_t diagNameSize = sizeof(diagName);
+                    runtime->get_technique_name(effectTech->technique, diagName, &diagNameSize);
+                    RestDiag::Detail("  render_technique '{}' for group '{}': {} us CPU", diagName, group->getName(), techniqueTimer.ElapsedMicros());
+                }
+            }
 
             effectTech->rendered = true;
             ++renderedTechniqueCount;
+            RestDiag::Count(RestDiag::g_counters.techniquesRendered);
 
             removalList.push_back(effectTech);
 
@@ -468,6 +500,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                 cmd_list->barrier(nativeStageRes, resource_usage::render_target, resource_usage::shader_resource);
                 cmd_list->barrier(active_resource.resource, resource_usage::shader_resource, resource_usage::render_target);
 
+                RestDiag::ScopedCpuTimer stagingBackTimer(RestDiag::g_counters.stagingCpuMicros);
                 if (view->rtv != 0) {
                     // Preserve-alpha groups write back colour only, leaving the target's alpha untouched.
                     if (preserveTargetAlpha)
@@ -637,6 +670,7 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
     // Remove call location from queue
     commandListData.commandQueue &= ~(invocation << (callLocation * MATCH_DELIMITER));
 
+    RestDiag::ScopedCpuTimer renderEffectsTimer(RestDiag::g_counters.renderEffectsCpuMicros);
     unique_lock<shared_mutex> renderLock(deviceData.render_mutex);
 
     if (deviceData.current_runtime == nullptr || (commandListData.ps.techniquesToRender.size() == 0 && commandListData.vs.techniquesToRender.size() == 0 &&
@@ -708,6 +742,7 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
     }
 
     if (rendered) {
+        RestDiag::Count(RestDiag::g_counters.renderEffectsCalls);
         cmd_list->get_private_data<state_tracking>().apply(cmd_list);
     }
 }

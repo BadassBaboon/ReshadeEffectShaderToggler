@@ -1,4 +1,5 @@
 #include "RenderingPreviewManager.h"
+#include "DiagnosticLog.h"
 #include "RenderingManager.h"
 #include "StateTracking.h"
 #include "Util.h"
@@ -224,7 +225,7 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
                 // This capture attempt runs every frame while hunting; throttle the log to once per
                 // distinct format so an HDR shader you're parked on doesn't flood ReShade.log.
                 static reshade::api::format s_last_skip_format = reshade::api::format::unknown;
-                if (desc.texture.format != s_last_skip_format) {
+                if (RestDiag::Enabled() && desc.texture.format != s_last_skip_format) {
                     s_last_skip_format = desc.texture.format;
                     reshade::log::message(reshade::log::level::warning,
                         ("[REST] Preview not engaged (unsafe target): samples=" + std::to_string(desc.texture.samples) +
@@ -255,6 +256,7 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
                 s_last_width = desc.texture.width;
                 s_last_height = desc.texture.height;
                 s_last_format = desc.texture.format;
+                if (RestDiag::Enabled())
                 reshade::log::message(reshade::log::level::debug,
                     ("[REST] Preview target captured: " + std::to_string(desc.texture.width) + "x" + std::to_string(desc.texture.height) +
                      " samples=" + std::to_string(desc.texture.samples) +
@@ -278,8 +280,7 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
         // so skip the preview rather than guess a state and hang the device.
         const resource_usage rs_usage = cmd_list->get_private_data<state_tracking>().stop_resource_barrier_tracking(rs);
         if (rs_usage == resource_usage::undefined) {
-            reshade::log::message(reshade::log::level::warning,
-                "[REST] Preview skipped: source state unknown on this command list (can't safely copy).");
+            RestDiag::Log("preview skipped: source state unknown on this command list (can't safely copy)");
             deviceData.huntPreview.matched = true;
             return;
         }

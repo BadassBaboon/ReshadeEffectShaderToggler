@@ -33,6 +33,7 @@
 #include <format>
 #include <functional>
 #include "AddonUIData.h"
+#include "DiagnosticLog.h"
 #include "RenderingManager.h"
 
 using namespace AddonImGui;
@@ -307,6 +308,18 @@ ToggleGroup* AddonUIData::CloneToggleGroup(int sourceGroupId)
     return &_toggleGroups.at(newId);
 }
 
+void AddonUIData::SetDiagnosticLogs(bool enabled)
+{
+    if (_diagnosticLogs == enabled)
+        return;
+    _diagnosticLogs = enabled;
+    RestDiag::g_enabled.store(enabled);
+    if (enabled)
+        RestDiag::RequestDetail();
+    reshade::log::message(reshade::log::level::info, enabled ? "[REST] DiagnosticLogs enabled." : "[REST] DiagnosticLogs disabled.");
+    MarkConfigDirty();
+}
+
 void AddonUIData::MoveGroupUp(int id)
 {
     auto it = std::find(_toggleGroupOrder.begin(), _toggleGroupOrder.end(), id);
@@ -382,6 +395,10 @@ void AddonUIData::LoadShaderTogglerIniFile(const string& fileName)
     }
 
     _preventRuntimeReload = iniFile.GetBoolOrDefault("PreventRuntimeReload", "General", false);
+    _diagnosticLogs = iniFile.GetBoolOrDefault("DiagnosticLogs", "General", false);
+    RestDiag::g_enabled.store(_diagnosticLogs);
+    if (_diagnosticLogs)
+        reshade::log::message(reshade::log::level::info, "[REST] DiagnosticLogs enabled: REST will log detailed rendering diagnostics.");
     _showObservedDraws = iniFile.GetBoolOrDefault("ShowObservedDraws", "General", true);
 
     for (uint32_t i = 0; i < ARRAYSIZE(KeybindNames); i++)
@@ -461,6 +478,7 @@ void AddonUIData::SaveShaderTogglerIniFile(const string& fileName)
     iniFile.SetFloat("OverlayOpacity", _overlayOpacity, "", "General");
     iniFile.SetInt("ShaderCollectionFrames", _startValueFramecountCollectionPhase, "", "General");
     iniFile.SetBool("PreventRuntimeReload", _preventRuntimeReload, "", "General");
+    iniFile.SetBool("DiagnosticLogs", _diagnosticLogs, "", "General");
     iniFile.SetBool("ShowObservedDraws", _showObservedDraws, "", "General");
 
     for (uint32_t i = 0; i < ARRAYSIZE(KeybindNames); i++)

@@ -1,4 +1,6 @@
 #include "ToggleGroupResourceManager.h"
+#include "DiagnosticLog.h"
+#include "RenderingManager.h"
 
 using namespace Rendering;
 using namespace reshade::api;
@@ -251,6 +253,12 @@ void ToggleGroupResourceManager::CheckGroupBuffers(reshade::api::effect_runtime*
                 }
             }
 
+            RestDiag::Count(RestDiag::g_counters.groupBufferRecreations);
+            RestDiag::Log("group '{}' buffer type {} (re)created: {}x{} {} res={}",
+                          group.getName(), i,
+                          resources.target_description.texture.width, resources.target_description.texture.height,
+                          Rendering::RenderingManager::FormatName(resources.target_description.texture.format),
+                          resources.res.handle);
             resources.state = GroupResourceState::RESOURCE_RECREATED;
         }
     }

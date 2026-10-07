@@ -151,6 +151,7 @@ class AddonUIData {
     std::string _resourceShim = "none";
     bool _trackDescriptors = true;
     bool _preventRuntimeReload = false;
+    bool _diagnosticLogs = false;
     bool _showObservedDraws = true;
     std::filesystem::path _basePath;
     TabType _currentTab = TabType::TAB_NONE;
@@ -242,6 +243,8 @@ class AddonUIData {
     void SetTrackDescriptors(bool track) { if (_trackDescriptors != track) { _trackDescriptors = track; MarkConfigDirty(); } }
     void AddToggleGroupRemovalCallback(std::function<void(reshade::api::effect_runtime*, ShaderToggler::ToggleGroup*)> callback);
     void SignalToggleGroupRemoved(reshade::api::effect_runtime*, ShaderToggler::ToggleGroup*);
+    bool GetDiagnosticLogs() const { return _diagnosticLogs; }
+    void SetDiagnosticLogs(bool enabled);
     bool GetPreventRuntimeReload() const { return _preventRuntimeReload; }
     void SetPreventRuntimeReload(bool reload) { if (_preventRuntimeReload != reload) { _preventRuntimeReload = reload; MarkConfigDirty(); } }
     bool GetShowObservedDraws() const { return _showObservedDraws; }

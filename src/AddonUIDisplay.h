@@ -2852,6 +2852,14 @@ static void DrawCategoryOptions(AddonImGui::AddonUIData& instance, reshade::api:
             instance.SetPreventRuntimeReload(runtimeReload);
         }
 
+        bool diagnosticLogs = instance.GetDiagnosticLogs();
+        if (DrawToggleRow("Diagnostic logs", &diagnosticLogs,
+                          "Writes detailed REST rendering diagnostics to ReShade.log: a per-second summary, what each group renders into,\n"
+                          "staging and buffer recreation, group toggles and ReShade effect reloads. Leave off unless you're troubleshooting.",
+                          diagnosticLogs ? "Logging to ReShade.log. Turn off when done; it adds overhead." : nullptr)) {
+            instance.SetDiagnosticLogs(diagnosticLogs);
+        }
+
         EndCard();
     }
 

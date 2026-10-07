@@ -202,6 +202,7 @@
     <ClInclude Include="AddonUIData.h" />
     <ClInclude Include="AddonUIDisplay.h" />
     <ClInclude Include="CDataFile.h" />
+    <ClInclude Include="DiagnosticLog.h" />
     <ClInclude Include="ConstantCopyBase.h" />
     <ClInclude Include="ConstantCopyDefinitions.h" />
     <ClInclude Include="ConstantCopyFFXIV.h" />
