@@ -194,7 +194,7 @@ class ShaderManager {
     std::shared_mutex _hashHandlesMutex;
     std::shared_mutex _markedShaderHashMutex;
     bool _hideMarkedShaders = false;
-    bool _hideHuntedShader = true;
+    bool _hideHuntedShader = false;
 
     std::unordered_map<uint32_t, std::vector<DrawGeometryStats>> _observedDrawGeometries;
     mutable std::shared_mutex _drawGeometryMutex;

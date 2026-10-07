@@ -52,6 +52,30 @@ bool RenderingEffectManager::RenderRemainingEffects(effect_runtime* runtime) {
     return rendered;
 }
 
+static reshade::api::format GetBackBufferTypelessFormat(effect_runtime* runtime) {
+    const resource backBuffer = runtime->get_current_back_buffer();
+    if (backBuffer == 0)
+        return reshade::api::format::unknown;
+    return format_to_typeless(runtime->get_device()->get_resource_desc(backBuffer).texture.format);
+}
+
+// Staging a target in the swapchain format clamps values outside that format's range (e.g. HDR
+// highlights above 1.0 in a float target). Log it once per group and format.
+static void LogFormatStaging(const ToggleGroup* group, reshade::api::format targetFormat, reshade::api::format backBufferFormat) {
+    // Called with render_mutex held exclusively.
+    static unordered_set<uint64_t> s_logged;
+    const uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(group->getId())) << 32) | static_cast<uint32_t>(targetFormat);
+    if (!s_logged.insert(key).second)
+        return;
+
+    reshade::log::message(reshade::log::level::info,
+      std::format("[REST] Group '{}' targets a {} buffer; effects run on a {} staging copy to match the swapchain "
+                  "(rendering into it directly makes ReShade stall the GPU twice per frame). Values outside the swapchain range are clamped.",
+                  group->getName(),
+                  RenderingManager::FormatName(targetFormat),
+                  RenderingManager::FormatName(backBufferFormat)).c_str());
+}
+
 bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                                             DeviceDataContainer& deviceData,
                                             RuntimeDataContainer& runtimeData,
@@ -119,10 +143,29 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         const device_api deviceApi = cmd_list->get_device()->get_api();
         const bool autoSceneColour = group->isAutoSceneColourActive(deviceApi);
         const bool preserveTargetAlpha = group->getPreserveAlpha() && !autoSceneColour;
-        const bool wantsNativeStaging =
-          autoSceneColour &&
+
+        // render_technique copies the target into ReShade's own back-buffer texture, and ReShade
+        // recreates that texture whenever the target's size or format differs from the swapchain:
+        // a GPU wait_idle on D3D12/Vulkan, plus an effect reload when the size or bit depth
+        // changes. ReShade's own present pass then switches it back, so rendering straight into an
+        // off-size target costs two full GPU stalls every frame. Stage off-size targets at
+        // swapchain size instead (Auto Scene Colour already did; manual groups now do too).
+        const bool offSizeTarget =
           runtimeWidth > 0 && runtimeHeight > 0 &&
           (desc.texture.width != runtimeWidth || desc.texture.height != runtimeHeight);
+        const bool manualStagingSupported =
+          !autoSceneColour && !group->getRenderToResourceViews() &&
+          desc.texture.samples <= 1 && desc.type == resource_type::texture_2d &&
+          (deviceApi == device_api::d3d10 || deviceApi == device_api::d3d11 || deviceApi == device_api::d3d12);
+        // A format that differs from the swapchain (e.g. a 16-bit float scene buffer on an 8-bit
+        // swapchain) triggers the same per-frame rebuild, so stage those in the swapchain format.
+        // Vulkan stages through image blits, which don't convert formats, so it keeps the size-only rule.
+        const reshade::api::format backBufferFormat = GetBackBufferTypelessFormat(runtime);
+        const reshade::api::format targetTypeless = format_to_typeless(desc.texture.format);
+        const bool formatMismatch =
+          deviceApi != device_api::vulkan &&
+          backBufferFormat != reshade::api::format::unknown && targetTypeless != backBufferFormat;
+        const bool wantsNativeStaging = (offSizeTarget || formatMismatch) && (autoSceneColour || manualStagingSupported);
         const bool vulkanAutoSceneColour = autoSceneColour && deviceApi == device_api::vulkan;
         const bool vulkanNativeStaging = vulkanAutoSceneColour && wantsNativeStaging;
         resource_usage vulkanTargetUsage = resource_usage::render_target;
@@ -209,7 +252,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
             desired.texture.depth_or_layers = 1;
             desired.texture.levels = 1;
             desired.texture.samples = 1;
-            desired.texture.format = format_to_typeless(active_resource.format);
+            desired.texture.format = formatMismatch ? backBufferFormat : format_to_typeless(active_resource.format);
 
             bool stagingCompatible = false;
             if (staging.res != 0) {
@@ -222,7 +265,9 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
 
             if (!stagingCompatible) {
                 staging.target_description = desired;
-                staging.view_format = active_resource.format;
+                staging.view_format = formatMismatch ? format_to_default_typed(backBufferFormat, 0) : active_resource.format;
+                if (formatMismatch)
+                    LogFormatStaging(group, targetTypeless, backBufferFormat);
                 staging.state = GroupResourceState::RESOURCE_INVALID;
                 continue;
             }
@@ -424,7 +469,11 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                 cmd_list->barrier(active_resource.resource, resource_usage::shader_resource, resource_usage::render_target);
 
                 if (view->rtv != 0) {
-                    shaderManager.CopyResource(cmd_list, nativeStageSRV, view->rtv, desc.texture.width, desc.texture.height);
+                    // Preserve-alpha groups write back colour only, leaving the target's alpha untouched.
+                    if (preserveTargetAlpha)
+                        shaderManager.CopyResourceMaskAlpha(cmd_list, nativeStageSRV, view->rtv, desc.texture.width, desc.texture.height);
+                    else
+                        shaderManager.CopyResource(cmd_list, nativeStageSRV, view->rtv, desc.texture.width, desc.texture.height);
                 }
 
                 cmd_list->barrier(nativeStageRes, resource_usage::shader_resource, resource_usage::render_target);

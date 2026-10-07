@@ -836,6 +836,22 @@ static bool isDrawCallSuppressed(const std::vector<ShaderToggler::ToggleGroup*>&
     return false;
 }
 
+// The group work queued for this call (effects, bindings, constants, preview capture) always runs
+// before the block decision, so a hidden or suppressed draw still triggers it. That is what
+// "Suppress draw calls" promises, and it keeps the hunted shader's live effect and render target
+// preview working. Vulkan hunting is the exception and is handled by ShouldSuppressVulkanHuntedCall.
+static bool IsGraphicsCallBlocked(const CommandListDataContainer& commandListData) {
+    return g_pixelShaderManager.isBlockedShader(commandListData.ps.activeShaderHash) ||
+           g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash) ||
+           isDrawCallSuppressed(commandListData.ps.blockedShaderGroups, commandListData) ||
+           isDrawCallSuppressed(commandListData.vs.blockedShaderGroups, commandListData);
+}
+
+static bool IsComputeCallBlocked(const CommandListDataContainer& commandListData) {
+    return g_computeShaderManager.isBlockedShader(commandListData.cs.activeShaderHash) ||
+           isDrawCallSuppressed(commandListData.cs.blockedShaderGroups, commandListData);
+}
+
 static bool onDraw(command_list* cmd_list, uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance) {
     CommandListDataContainer& commandListData = cmd_list->get_private_data<CommandListDataContainer>();
     commandListData.hasDrawGeometry = true;
@@ -853,17 +869,9 @@ static bool onDraw(command_list* cmd_list, uint32_t vertex_count, uint32_t insta
     if (ShouldSuppressVulkanHuntedCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS))
         return true;
 
-    if (g_pixelShaderManager.isBlockedShader(commandListData.ps.activeShaderHash) ||
-        g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash) ||
-        isDrawCallSuppressed(commandListData.ps.blockedShaderGroups, commandListData) ||
-        isDrawCallSuppressed(commandListData.vs.blockedShaderGroups, commandListData)) {
-        ClearSuppressedCallState(commandListData, Rendering::MATCH_PS | Rendering::MATCH_VS, false);
-        return true;
-    }
-
     CheckDrawCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS);
 
-    return false;
+    return IsGraphicsCallBlocked(commandListData);
 }
 
 static bool onDispatch(command_list* cmd_list, uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z) {
@@ -876,15 +884,9 @@ static bool onDispatch(command_list* cmd_list, uint32_t group_count_x, uint32_t 
     if (ShouldSuppressVulkanHuntedCall(cmd_list, Rendering::MATCH_CS))
         return true;
 
-    if (g_computeShaderManager.isBlockedShader(commandListData.cs.activeShaderHash) ||
-        isDrawCallSuppressed(commandListData.cs.blockedShaderGroups, commandListData)) {
-        ClearSuppressedCallState(commandListData, Rendering::MATCH_CS, false);
-        return true;
-    }
-
     CheckDrawCall(cmd_list, Rendering::MATCH_CS);
 
-    return false;
+    return IsComputeCallBlocked(commandListData);
 }
 
 static bool onDrawIndexed(command_list* cmd_list,
@@ -909,17 +911,9 @@ static bool onDrawIndexed(command_list* cmd_list,
     if (ShouldSuppressVulkanHuntedCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS))
         return true;
 
-    if (g_pixelShaderManager.isBlockedShader(commandListData.ps.activeShaderHash) ||
-        g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash) ||
-        isDrawCallSuppressed(commandListData.ps.blockedShaderGroups, commandListData) ||
-        isDrawCallSuppressed(commandListData.vs.blockedShaderGroups, commandListData)) {
-        ClearSuppressedCallState(commandListData, Rendering::MATCH_PS | Rendering::MATCH_VS, false);
-        return true;
-    }
-
     CheckDrawCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS);
 
-    return false;
+    return IsGraphicsCallBlocked(commandListData);
 }
 
 static bool onDrawOrDispatchIndirect(command_list* cmd_list, indirect_command type, resource buffer, uint64_t offset, uint32_t draw_count, uint32_t stride) {
@@ -937,25 +931,13 @@ static bool onDrawOrDispatchIndirect(command_list* cmd_list, indirect_command ty
         case indirect_command::draw_indexed:
             if (ShouldSuppressVulkanHuntedCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS))
                 return true;
-            if (g_pixelShaderManager.isBlockedShader(commandListData.ps.activeShaderHash) ||
-                g_vertexShaderManager.isBlockedShader(commandListData.vs.activeShaderHash) ||
-                isDrawCallSuppressed(commandListData.ps.blockedShaderGroups, commandListData) ||
-                isDrawCallSuppressed(commandListData.vs.blockedShaderGroups, commandListData)) {
-                ClearSuppressedCallState(commandListData, Rendering::MATCH_PS | Rendering::MATCH_VS, false);
-                return true;
-            }
             CheckDrawCall(cmd_list, Rendering::MATCH_PS | Rendering::MATCH_VS);
-            break;
+            return IsGraphicsCallBlocked(commandListData);
         case indirect_command::dispatch:
             if (ShouldSuppressVulkanHuntedCall(cmd_list, Rendering::MATCH_CS))
                 return true;
-            if (g_computeShaderManager.isBlockedShader(commandListData.cs.activeShaderHash) ||
-                isDrawCallSuppressed(commandListData.cs.blockedShaderGroups, commandListData)) {
-                ClearSuppressedCallState(commandListData, Rendering::MATCH_CS, false);
-                return true;
-            }
             CheckDrawCall(cmd_list, Rendering::MATCH_CS);
-            break;
+            return IsComputeCallBlocked(commandListData);
     }
 
     return false;

@@ -1518,7 +1518,7 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
         ImGui::PopStyleColor();
     }
     ImGui::PopTextWrapPos();
-    ImGui::TextWrapped("Pending marks apply when you click Done.");
+    ImGui::TextWrapped("The selected shader previews live. Marked shaders are saved to the group when you click Done.");
     ImGui::Separator();
 
     const uint32_t selectedHash = shaderManager->getActiveHuntedShaderHash();
@@ -1577,7 +1577,11 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
               ImGui::Selectable(hashText.c_str(), entry.collected && selectedHash == hash, ImGuiSelectableFlags_AllowDoubleClick);
 
             if (entry.collected) {
-                if ((clicked || (ImGui::IsItemFocused() && selectedHash != hash)) && shaderManager->setActiveHuntedShaderHash(hash)) {
+                // Follow keyboard focus only on arrow-key navigation. A focused row otherwise kept
+                // re-selecting itself and undid Next/Previous from hotkeys and the nav buttons.
+                const bool focusNavigated = ImGui::IsItemFocused() && selectedHash != hash &&
+                                            (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_DownArrow));
+                if ((clicked || focusNavigated) && shaderManager->setActiveHuntedShaderHash(hash)) {
                     instance.UpdateToggleGroupsForShaderHashes();
                 }
 
@@ -1861,6 +1865,21 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
             // ImGuiWindowFlags_AlwaysAutoResize there and let this pane grow past the window edge.
             if (ImGui::BeginChild("GroupSettings", { 0, 0 }, true, ImGuiWindowFlags_None)) {
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
+
+                // Off by default: the hunted shader stays visible so the group's effects and the
+                // render target preview update live while you step through shaders.
+                const bool vulkanHunting = runtime->get_device()->get_api() == reshade::api::device_api::vulkan;
+                bool hideHunted = selectedShaderManager->isHideHuntedShader();
+                if (vulkanHunting) ImGui::BeginDisabled();
+                if (DrawToggleRow("Hide hunted shader in 3D scene", &hideHunted,
+                                  "Skip draws of the currently selected shader so you can see what it renders.\nWhile hidden, effects still trigger on it and the preview still captures it.",
+                                  vulkanHunting ? "Vulkan always hides the hunted shader (preview is captured at a safe render-pass boundary)." : nullptr,
+                                  4.0f)) {
+                    instance.GetPixelShaderManager()->setHideHuntedShader(hideHunted);
+                    instance.GetVertexShaderManager()->setHideHuntedShader(hideHunted);
+                    instance.GetComputeShaderManager()->setHideHuntedShader(hideHunted);
+                }
+                if (vulkanHunting) ImGui::EndDisabled();
 
                 bool hideMarkedShaders = group->getHideMarkedShaders();
                 if (DrawToggleRow("Hide marked shaders", &hideMarkedShaders,
