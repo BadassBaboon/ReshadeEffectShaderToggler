@@ -92,8 +92,7 @@ ToggleGroup::ToggleGroup(string name, int id) {
         {},
         [this]() {
             const GroupResource& staging = _group_buffers[static_cast<uint32_t>(GroupResourceType::RESOURCE_NATIVE_STAGING)];
-            // Requested by _RenderEffects for any off-size target (Auto Scene Colour or manual).
-            return staging.target_description.texture.width > 0 && staging.target_description.texture.height > 0;
+            return _autoRenderSRV && staging.target_description.texture.width > 0 && staging.target_description.texture.height > 0;
         },
         [this]() { return false; },
         GroupResourceState::RESOURCE_INVALID,

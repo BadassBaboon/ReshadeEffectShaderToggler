@@ -128,25 +128,17 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         const bool autoSceneColour = group->isAutoSceneColourActive(deviceApi);
         const bool preserveTargetAlpha = group->getPreserveAlpha() && !autoSceneColour;
 
-        // render_technique copies the target into ReShade's own back-buffer texture, and ReShade
-        // recreates that texture whenever the target's size or format differs from the swapchain:
-        // a GPU wait_idle on D3D12/Vulkan, plus an effect reload when the size or bit depth
-        // changes. ReShade's own present pass then switches it back, so rendering straight into an
-        // off-size target costs two full GPU stalls every frame. Stage off-size targets at
-        // swapchain size instead (Auto Scene Colour already did; manual groups now do too).
+        // Only Auto Scene Colour stages off-size targets (its pre-upscale scene buffer). Manual groups
+        // render straight into the matched target, as before the REST Enhanced port: ReShade 6.x keeps
+        // a cached effect permutation per target size/format, and staging a manual target by hand
+        // (assuming it is in render-target state) hung the GPU on RDR1 (D3D12) with an off-size target.
         const bool offSizeTarget =
           runtimeWidth > 0 && runtimeHeight > 0 &&
           (desc.texture.width != runtimeWidth || desc.texture.height != runtimeHeight);
-        const bool manualStagingSupported =
-          !autoSceneColour && !group->getRenderToResourceViews() &&
-          desc.texture.samples <= 1 && desc.type == resource_type::texture_2d &&
-          (deviceApi == device_api::d3d10 || deviceApi == device_api::d3d11 || deviceApi == device_api::d3d12);
-        // A format different from the swapchain's is rendered directly: ReShade 6.x keeps a cached
-        // effect permutation per target format, and staging it in the swapchain format would clamp HDR.
         const reshade::api::format backBufferFormat = GetBackBufferTypelessFormat(runtime);
         const bool formatMismatch =
           backBufferFormat != reshade::api::format::unknown && format_to_typeless(desc.texture.format) != backBufferFormat;
-        const bool wantsNativeStaging = offSizeTarget && (autoSceneColour || manualStagingSupported);
+        const bool wantsNativeStaging = autoSceneColour && offSizeTarget;
         const bool vulkanAutoSceneColour = autoSceneColour && deviceApi == device_api::vulkan;
         const bool vulkanNativeStaging = vulkanAutoSceneColour && wantsNativeStaging;
         resource_usage vulkanTargetUsage = resource_usage::render_target;
@@ -502,11 +494,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
 
                 RestDiag::ScopedCpuTimer stagingBackTimer(RestDiag::g_counters.stagingCpuMicros);
                 if (view->rtv != 0) {
-                    // Preserve-alpha groups write back colour only, leaving the target's alpha untouched.
-                    if (preserveTargetAlpha)
-                        shaderManager.CopyResourceMaskAlpha(cmd_list, nativeStageSRV, view->rtv, desc.texture.width, desc.texture.height);
-                    else
-                        shaderManager.CopyResource(cmd_list, nativeStageSRV, view->rtv, desc.texture.width, desc.texture.height);
+                    shaderManager.CopyResource(cmd_list, nativeStageSRV, view->rtv, desc.texture.width, desc.texture.height);
                 }
 
                 cmd_list->barrier(nativeStageRes, resource_usage::shader_resource, resource_usage::render_target);
