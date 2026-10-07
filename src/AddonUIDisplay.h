@@ -112,7 +112,11 @@ static bool BeginCard(const char* str_id, const char* title = nullptr) {
     ImGui::GetStateStorage()->SetFloat(ImGui::GetID("##card_top_y"), p_start.y);
 
     ImGui::Dummy(ImVec2(0, 8.0f));
+    // Wrap all plain text inside the card at the card's inner right edge so long
+    // labels and status lines never run past the border.
+    const float wrap_local_x = ImGui::GetCursorPosX() + avail_w - RFX_CARD_PAD;
     ImGui::Indent(RFX_CARD_PAD);
+    ImGui::PushTextWrapPos(wrap_local_x);
     if (title != nullptr && title[0] != '\0') {
         ImGui::TextColored(rfx_accent(), "%s", title);
         ImGui::Dummy(ImVec2(0, 4.0f));
@@ -121,6 +125,7 @@ static bool BeginCard(const char* str_id, const char* title = nullptr) {
 }
 
 static void EndCard() {
+    ImGui::PopTextWrapPos();
     ImGui::Dummy(ImVec2(0, 8.0f));
     ImGui::Unindent(RFX_CARD_PAD);
 
@@ -204,20 +209,35 @@ static void DrawTableStepper(const char* id_suffix, Getter getVal, Setter setVal
     }
 }
 
+// Places the next control at local x `ctrl_x` on the same line as the previous item when it
+// clears that item; otherwise lets it flow onto the next line instead of overlapping.
+static void SameLineIfFits(float ctrl_x) {
+    const float prev_end = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x + ImGui::GetScrollX() +
+                           ImGui::GetStyle().ItemSpacing.x;
+    if (ctrl_x >= prev_end) {
+        ImGui::SameLine(ctrl_x);
+    }
+}
+
 static bool DrawToggleRow(const char* label, bool* v, const char* tooltip = nullptr, const char* subtext = nullptr, float rightPad = RFX_CARD_PAD) {
     ImGui::PushID(label);
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const float switch_w = ImGui::GetFrameHeight() * 0.70f * 1.85f;
+    const float switch_x = ImGui::GetCursorPosX() + avail - switch_w - rightPad;
+    // Keep the label column clear of the switch so long labels wrap instead of overlapping it.
+    const float label_wrap_x = switch_x - ImGui::GetStyle().ItemSpacing.x * 2.0f;
+    const bool wrap_label = label_wrap_x > ImGui::GetCursorPosX() + 60.0f;
+    if (wrap_label) ImGui::PushTextWrapPos(label_wrap_x);
     ImGui::BeginGroup();
-    ImGui::TextUnformatted(label);
+    ImGui::Text("%s", label);
     if (subtext != nullptr && subtext[0] != '\0') {
         ImGui::TextDisabled("%s", subtext);
     }
     ImGui::EndGroup();
+    if (wrap_label) ImGui::PopTextWrapPos();
 
     if (tooltip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
 
-    float avail = ImGui::GetContentRegionAvail().x;
-    float switch_w = ImGui::GetFrameHeight() * 0.70f * 1.85f;
-    float switch_x = ImGui::GetCursorPosX() + avail - switch_w - rightPad;
     if (switch_x > ImGui::GetCursorPosX()) {
         ImGui::SameLine(switch_x);
     } else {
@@ -468,21 +488,34 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
             ImGui::TextUnformatted("Current Routing Mode");
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
+            const char* modeDesc = nullptr;
+            const char* modeName = nullptr;
+            ImVec4 modeCol;
             if (!allowAll) {
-                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.4f, 1.0f), "INCLUSION LIST");
-                ImGui::SameLine();
-                ImGui::TextDisabled("- Only checked techniques trigger for this group");
+                modeName = "INCLUSION LIST";
+                modeCol = ImVec4(0.3f, 0.9f, 0.4f, 1.0f);
+                modeDesc = "Only checked techniques trigger for this group.";
             } else if (exceptions) {
-                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.2f, 1.0f), "EXCLUSION LIST");
-                ImGui::SameLine();
-                ImGui::TextDisabled("- All active techniques trigger EXCEPT checked ones");
+                modeName = "EXCLUSION LIST";
+                modeCol = ImVec4(1.0f, 0.75f, 0.2f, 1.0f);
+                modeDesc = "All active techniques trigger EXCEPT checked ones.";
             } else {
-                ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "ALL ACTIVE TECHNIQUES (Passive)");
-                ImGui::SameLine();
-                ImGui::TextDisabled("- All globally enabled ReShade techniques apply");
+                modeName = "ALL ACTIVE TECHNIQUES (Passive)";
+                modeCol = ImVec4(0.4f, 0.8f, 1.0f, 1.0f);
+                modeDesc = "All globally enabled ReShade techniques apply.";
             }
+            // Right-align with the switches above (same 8px pad as DrawTableToggleSwitch).
+            const float modeW = ImGui::CalcTextSize(modeName).x;
+            const float modeAvail = ImGui::GetContentRegionAvail().x;
+            if (modeAvail > modeW + 8.0f) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + modeAvail - modeW - 8.0f);
+            }
+            ImGui::TextColored(modeCol, "%s", modeName);
 
             ImGui::EndTable();
+            // Description on its own full-width line so it wraps at the card edge instead of
+            // being squeezed into the leftover space beside the mode name.
+            ImGui::TextDisabled("%s", modeDesc);
         }
         EndCard();
     }
@@ -538,9 +571,16 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
             selectionChanged = true;
         }
 
-        ImGui::SameLine();
+        char techCountBuf[64];
+        snprintf(techCountBuf, sizeof(techCountBuf), "%zu selected / %zu available", group->preferredTechniques().size(), availableCount);
+        // Only share the button row when the whole counter fits; otherwise give it its own line.
+        const float rowRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - RFX_CARD_PAD;
+        const float prevEnd = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x + ImGui::GetScrollX() + ImGui::GetStyle().ItemSpacing.x;
+        if (prevEnd + ImGui::CalcTextSize(techCountBuf).x <= rowRight) {
+            ImGui::SameLine();
+        }
         ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("|  %zu selected / %zu available", group->preferredTechniques().size(), availableCount);
+        ImGui::TextDisabled("%s", techCountBuf);
 
         ImGui::Separator();
 
@@ -622,18 +662,20 @@ static void DrawPreview(unsigned long long textureId,
                         uint32_t srcHeight,
                         ImVec4 tint = ImVec4(1.0f, 1.0f, 1.0f, 1.0f)) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-    float height = ImGui::GetWindowHeight();
-    float width = ImGui::GetWindowWidth();
+    const ImVec2 origin = ImGui::GetCursorPos();
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float width = std::max(1.0f, avail.x);
+    const float height = std::max(1.0f, avail.y);
 
-    float new_width = static_cast<float>(srcWidth);
-    float new_height = static_cast<float>(srcHeight);
+    // Unknown source size (0) would make the ratio NaN and the image invisible; fill the pane instead.
+    float new_width = srcWidth > 0 ? static_cast<float>(srcWidth) : width;
+    float new_height = srcHeight > 0 ? static_cast<float>(srcHeight) : height;
 
-    float ratio = std::min(width / new_width, height / new_height);
-    new_width *= ratio;
-    new_height *= ratio;
+    const float ratio = std::min(width / new_width, height / new_height);
+    new_width = std::floor(new_width * ratio);
+    new_height = std::floor(new_height * ratio);
 
-    auto centralizedCursorpos = ImVec2((width - new_width) * 0.5f, (height - new_height) * 0.5f);
-    ImGui::SetCursorPos(centralizedCursorpos);
+    ImGui::SetCursorPos(ImVec2(origin.x + (width - new_width) * 0.5f, origin.y + (height - new_height) * 0.5f));
 
     ImGui::Image(textureId, ImVec2(new_width, new_height), ImVec2(0, 0), ImVec2(1, 1), tint);
 
@@ -666,13 +708,10 @@ static void DisplayPreview(AddonImGui::AddonUIData& instance,
     if (deviceData.huntPreview.target != 0) {
         const char* stageName = deviceData.huntPreview.hunted_stage == 0 ? "PS" :
                                 deviceData.huntPreview.hunted_stage == 1 ? "VS" : "CS";
-        ImGui::Text("Shader: 0x%08x (%s)", deviceData.huntPreview.hunted_shader_hash, stageName);
-        ImGui::SameLine();
-        ImGui::Text("Target: %ux%u", deviceData.huntPreview.width, deviceData.huntPreview.height);
-        ImGui::SameLine();
-        ImGui::Text("Format: %s", Rendering::RenderingManager::FormatName(deviceData.huntPreview.format).c_str());
-        ImGui::SameLine();
-        ImGui::Text("Address: 0x%llx", static_cast<unsigned long long>(deviceData.huntPreview.target.handle));
+        ImGui::Text("Shader: 0x%08x (%s)   Target: %ux%u", deviceData.huntPreview.hunted_shader_hash, stageName,
+                    deviceData.huntPreview.width, deviceData.huntPreview.height);
+        ImGui::Text("Format: %s   Address: 0x%llx", Rendering::RenderingManager::FormatName(deviceData.huntPreview.format).c_str(),
+                    static_cast<unsigned long long>(deviceData.huntPreview.target.handle));
         ImGui::Separator();
     }
 
@@ -701,7 +740,7 @@ static void DisplayPreview(AddonImGui::AddonUIData& instance,
             desiredPreviewH = std::clamp(availPreviewW * aspect, 280.0f, 540.0f);
         }
 
-        if (ImGui::BeginChild("RTPreview##preview", ImVec2(-RFX_CARD_PAD, desiredPreviewH), true, ImGuiWindowFlags_None)) {
+        if (ImGui::BeginChild("RTPreview##preview", ImVec2(-RFX_CARD_PAD, desiredPreviewH), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
             DrawPreview(srv.handle, deviceData.huntPreview.width, deviceData.huntPreview.height, previewTint);
         }
         ImGui::EndChild();
@@ -742,7 +781,7 @@ static void DisplayBindingPreview(AddonImGui::AddonUIData& instance,
             desiredPreviewH = std::clamp(availPreviewW * aspect, 280.0f, 540.0f);
         }
 
-        if (ImGui::BeginChild("BindingPreview##preview", ImVec2(-RFX_CARD_PAD, desiredPreviewH), true, ImGuiWindowFlags_None)) {
+        if (ImGui::BeginChild("BindingPreview##preview", ImVec2(-RFX_CARD_PAD, desiredPreviewH), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
             DrawPreview(res_view.handle, groupResource.target_description.texture.width, groupResource.target_description.texture.height);
         }
         ImGui::EndChild();
@@ -1467,6 +1506,8 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
     }
     std::sort(missingMarkedHashes.begin(), missingMarkedHashes.end());
 
+    // Wrap at the pane edge: this pane is user-resizable and can get narrow.
+    ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%zu collected | %zu marked | %zu not seen",
                         hashes.size(),
                         markedCount,
@@ -1476,6 +1517,7 @@ static void DisplayGroupView(AddonImGui::AddonUIData& instance,
         ImGui::TextUnformatted("Red = marked but not observed during latest pass.");
         ImGui::PopStyleColor();
     }
+    ImGui::PopTextWrapPos();
     ImGui::TextWrapped("Pending marks apply when you click Done.");
     ImGui::Separator();
 
@@ -1815,7 +1857,9 @@ static void DisplayOverlay(AddonImGui::AddonUIData& instance, Rendering::Resourc
 
             ImGui::SameLine();
 
-            if (ImGui::BeginChild("GroupSettings", { 0, 0 }, true, ImGuiChildFlags_AlwaysAutoResize)) {
+            // The bool-border overload takes ImGuiWindowFlags: ImGuiChildFlags_AlwaysAutoResize aliased
+            // ImGuiWindowFlags_AlwaysAutoResize there and let this pane grow past the window edge.
+            if (ImGui::BeginChild("GroupSettings", { 0, 0 }, true, ImGuiWindowFlags_None)) {
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3, 3));
 
                 bool hideMarkedShaders = group->getHideMarkedShaders();
@@ -2302,11 +2346,7 @@ static void DrawCategoryGroups(AddonImGui::AddonUIData& instance, reshade::api::
                                      spacing + RFX_CARD_PAD;
 
             const float avail = ImGui::GetContentRegionAvail().x;
-            if (avail > totalBtnsW + 10.0f) {
-                ImGui::SameLine(ImGui::GetCursorPosX() + avail - totalBtnsW);
-            } else {
-                ImGui::Spacing();
-            }
+            SameLineIfFits(ImGui::GetCursorPosX() + avail - totalBtnsW);
 
             if (isEditingShaders) {
                 ImGui::PushStyleColor(ImGuiCol_Button, rfx_col(ImGuiCol_ButtonActive));
@@ -2560,11 +2600,7 @@ static void DrawCategoryGroups(AddonImGui::AddonUIData& instance, reshade::api::
                 const float rightActionsW = cloneW + copyW + deleteW + spacing * 2.0f + RFX_CARD_PAD;
 
                 const float availRight = ImGui::GetContentRegionAvail().x;
-                if (availRight > rightActionsW + 10.0f) {
-                    ImGui::SameLine(ImGui::GetCursorPosX() + availRight - rightActionsW);
-                } else {
-                    ImGui::Spacing();
-                }
+                SameLineIfFits(ImGui::GetCursorPosX() + availRight - rightActionsW);
 
                 if (ImGui::Button("Clone")) {
                     toClone.push_back(group.getId());
@@ -2652,12 +2688,7 @@ static void DrawCategoryKeybindings(AddonImGui::AddonUIData& instance, reshade::
         const float inputW = 200.0f;
         const float spacing = ImGui::GetStyle().ItemSpacing.x;
         const float totalW = inputW + spacing + clearBtnW;
-        const float ctrl_x = ImGui::GetCursorPosX() + avail - totalW - RFX_CARD_PAD;
-        if (ctrl_x > ImGui::GetCursorPosX()) {
-            ImGui::SameLine(ctrl_x);
-        } else {
-            ImGui::SameLine();
-        }
+        SameLineIfFits(ImGui::GetCursorPosX() + avail - totalW - RFX_CARD_PAD);
 
         ImGui::SetNextItemWidth(inputW);
         uint32_t gpToggleAll = instance.GetGamepadToggleAll();
@@ -2722,12 +2753,7 @@ static void DrawCategoryOptions(AddonImGui::AddonUIData& instance, reshade::api:
             ImGui::SetTooltip("%s", tooltip);
 
         const float avail = ImGui::GetContentRegionAvail().x;
-        const float ctrl_x = ImGui::GetCursorPosX() + avail - ctrlW - RFX_CARD_PAD;
-        if (ctrl_x > ImGui::GetCursorPosX()) {
-            ImGui::SameLine(ctrl_x);
-        } else {
-            ImGui::SameLine();
-        }
+        SameLineIfFits(ImGui::GetCursorPosX() + avail - ctrlW - RFX_CARD_PAD);
         ImGui::SetNextItemWidth(ctrlW);
         drawControl();
         if (tooltip && ImGui::IsItemHovered())
@@ -2849,60 +2875,35 @@ static void DisplayRestTab(AddonImGui::AddonUIData& instance, reshade::api::effe
     s_imguiWantTextInput.store(ImGui::GetIO().WantTextInput);
     RfxThemeScope theme;
 
-    // Top Header Banner
+    // Top Header Banner (regular layout items, so nothing can overlap the panes below)
     ImGui::Spacing();
-    ImDrawList* draw = ImGui::GetWindowDrawList();
-    ImFont* font = ImGui::GetFont();
-    const float base_font_size = ImGui::GetFontSize();
-    const float big_size = base_font_size * 1.20f;
-    const float small_size = base_font_size * 0.90f;
+    {
+        size_t activeCount = 0;
+        const auto& groups = instance.GetToggleGroups();
+        for (const auto& [_, g] : groups) {
+            if (g.isActive()) ++activeCount;
+        }
+        char status_str[64];
+        snprintf(status_str, sizeof(status_str), "%zu Groups (%zu Active)", groups.size(), activeCount);
+        const std::string ver_text = "v" REST_VERSION_STRING;
+        const ImGuiStyle& style = ImGui::GetStyle();
 
-    const ImVec2 screen_pos = ImGui::GetCursorScreenPos();
-    const float banner_top_y = screen_pos.y;
-    const float cur_x = screen_pos.x;
+        // Visible right edge of the window, independent of any horizontal content overflow.
+        const float visible_right = ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - style.WindowPadding.x -
+                                    ((ImGui::GetScrollMaxY() > 0.0f) ? style.ScrollbarSize : 0.0f);
 
-    // "Reshade Effect Shader Toggler"
-    const char* title_text = "Reshade Effect Shader Toggler";
-    const ImVec2 title_sz = font->CalcTextSizeA(big_size, FLT_MAX, -1.0f, title_text);
+        ImGui::TextColored(rfx_accent(), "Reshade Effect Shader Toggler");
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", ver_text.c_str());
 
-    // Version string (e.g. "v1.4.2.0")
-    const float baseline_offset = (big_size - small_size) * 0.78f;
-    const std::string ver_text = "v" REST_VERSION_STRING;
-    const ImVec2 ver_sz = font->CalcTextSizeA(small_size, FLT_MAX, -1.0f, ver_text.c_str());
-
-    // Group count / active status badge on the right
-    size_t activeCount = 0;
-    const auto& groups = instance.GetToggleGroups();
-    for (const auto& [_, g] : groups) {
-        if (g.isActive()) ++activeCount;
+        const float status_w = ImGui::CalcTextSize(status_str).x;
+        const float status_x = visible_right - status_w;
+        if (status_x >= ImGui::GetItemRectMax().x + style.ItemSpacing.x * 3.0f) {
+            ImGui::SameLine(status_x - ImGui::GetWindowPos().x + ImGui::GetScrollX());
+        }
+        ImGui::TextColored(activeCount > 0 ? rfx_ok() : rfx_col(ImGuiCol_TextDisabled), "%s", status_str);
     }
-    char status_str[64];
-    snprintf(status_str, sizeof(status_str), "%zu Groups (%zu Active)", groups.size(), activeCount);
-    const ImVec2 status_sz = font->CalcTextSizeA(small_size, FLT_MAX, -1.0f, status_str);
-    const ImU32 status_col = activeCount > 0 ? ImGui::ColorConvertFloat4ToU32(rfx_ok()) : rfx_u32(ImGuiCol_TextDisabled);
-
-    const float avail_w = ImGui::GetContentRegionAvail().x;
-    const float max_right_x = cur_x + avail_w - 6.0f;
-    const float status_x = max_right_x - status_sz.x;
-
-    const bool fits_one_line = (cur_x + title_sz.x + 12.0f + ver_sz.x + 24.0f <= status_x);
-
-    float banner_h = 0.0f;
-    if (fits_one_line) {
-        draw->AddText(font, big_size, ImVec2(cur_x, banner_top_y), rfx_u32(ImGuiCol_Text), title_text);
-        draw->AddText(font, small_size, ImVec2(cur_x + title_sz.x + 8.0f, banner_top_y + baseline_offset), rfx_u32(ImGuiCol_TextDisabled), ver_text.c_str());
-        draw->AddText(font, small_size, ImVec2(status_x, banner_top_y + baseline_offset), status_col, status_str);
-        banner_h = title_sz.y + 10.0f;
-    } else {
-        draw->AddText(font, big_size, ImVec2(cur_x, banner_top_y), rfx_u32(ImGuiCol_Text), title_text);
-        const float line2_y = banner_top_y + title_sz.y + 4.0f;
-        draw->AddText(font, small_size, ImVec2(cur_x, line2_y), rfx_u32(ImGuiCol_TextDisabled), ver_text.c_str());
-        const float line2_status_x = (status_x > cur_x + ver_sz.x + 16.0f) ? status_x : (cur_x + ver_sz.x + 16.0f);
-        draw->AddText(font, small_size, ImVec2(line2_status_x, line2_y), status_col, status_str);
-        banner_h = title_sz.y + small_size + 16.0f;
-    }
-
-    ImGui::Dummy(ImVec2(0.0f, banner_h));
+    ImGui::Separator();
     ImGui::Spacing();
 
     // Two-pane layout: Left Sidebar + Right Content Area
@@ -2970,14 +2971,12 @@ static void DisplayRestTab(AddonImGui::AddonUIData& instance, reshade::api::effe
         };
 
         ImGui::Dummy(ImVec2(0.0f, 4.0f));
-        ImVec2 cat_pos = ImGui::GetCursorScreenPos();
-        cat_pos.x += 6.0f;
-        const char* cat_title = cat_titles[s_currentRestCategory];
-        const float cat_size = base_font_size * 1.25f;
-        const ImVec2 cat_sz = font->CalcTextSizeA(cat_size, FLT_MAX, -1.0f, cat_title);
-        ImGui::GetWindowDrawList()->AddText(font, cat_size, cat_pos, rfx_u32(ImGuiCol_Text), cat_title);
-        ImGui::Dummy(ImVec2(0.0f, cat_sz.y + 14.0f));
-        ImGui::Spacing();
+        ImGui::Indent(6.0f);
+        ImGui::SetWindowFontScale(1.25f);
+        ImGui::TextUnformatted(cat_titles[s_currentRestCategory]);
+        ImGui::SetWindowFontScale(1.0f);
+        ImGui::Unindent(6.0f);
+        ImGui::Dummy(ImVec2(0.0f, 10.0f));
 
         switch (s_currentRestCategory) {
         case CAT_GROUPS:
