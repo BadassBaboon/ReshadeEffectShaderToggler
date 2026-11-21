@@ -110,8 +110,6 @@ class ShaderManager {
     }
     void resetActiveHuntedShader();
 
-    size_t getPipelineCount() { return _handleToShaderHash.size(); }
-    size_t getShaderCount() { return _shaderHashes.size(); }
     std::unordered_set<uint32_t> getCollectedShaderHashes() const {
         std::shared_lock lock(_collectedActiveHandlesMutex);
         return _collectedActiveShaderHashes;
@@ -179,7 +177,6 @@ class ShaderManager {
   private:
     void setActiveHuntedShaderHandle();
 
-    std::unordered_set<uint32_t> _shaderHashes; // all shader hashes added through init pipeline
     tsl::robin_map<uint64_t, uint32_t> _handleToShaderHash;
     std::unordered_set<uint32_t> _collectedActiveShaderHashes; // membership lookup for shaders collected during the active collection phase
     std::vector<uint32_t> _collectedActiveShaderOrder;          // stable first-seen order used by hunting navigation and UI
@@ -191,8 +188,8 @@ class ShaderManager {
     mutable std::shared_mutex _collectedActiveHandlesMutex;
     std::shared_mutex _hashHandlesMutex;
     std::shared_mutex _markedShaderHashMutex;
-    bool _hideMarkedShaders = false;
-    bool _hideHuntedShader = false;
+    std::atomic_bool _hideMarkedShaders = false;
+    std::atomic_bool _hideHuntedShader = false;
 
     std::unordered_map<uint32_t, std::vector<DrawGeometryStats>> _observedDrawGeometries;
     mutable std::shared_mutex _drawGeometryMutex;

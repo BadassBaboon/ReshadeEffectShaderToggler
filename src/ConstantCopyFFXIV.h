@@ -49,11 +49,11 @@ class ConstantCopyFFXIV final : public virtual ConstantCopyBase {
                            reshade::api::map_access access,
                            void** data) override final{};
     void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource) override final{};
-    void GetHostConstantBuffer(reshade::api::command_list* cmd_list,
+    bool GetHostConstantBuffer(reshade::api::command_list* cmd_list,
                                ShaderToggler::ToggleGroup* group,
                                std::vector<uint8_t>& dest,
                                size_t size,
-                               uint64_t resourceHandle) override final;
+                               uint64_t resourceHandle, uint64_t offset) override final;
 
   private:
     static std::vector<std::tuple<const void*, uint64_t, size_t, bool>> _hostResourceBuffer;

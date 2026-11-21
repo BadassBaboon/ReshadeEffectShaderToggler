@@ -18,7 +18,7 @@ class ConstantCopyMemcpySingular final : public virtual ConstantCopyMemcpy {
     void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource) override final;
 
   private:
-    static BufferCopy _bufferCopy;
+    static thread_local BufferCopy _bufferCopy;
 };
 }
 }

@@ -43,31 +43,13 @@ void ShaderManager::addHashHandlePair(uint32_t shaderHash, uint64_t pipelineHand
     if (pipelineHandle > 0 && shaderHash > 0) {
         unique_lock lock(_hashHandlesMutex);
         _handleToShaderHash[pipelineHandle] = shaderHash;
-        _shaderHashes.emplace(shaderHash);
     }
 }
 
 void ShaderManager::removeHandle(uint64_t handle) {
-    uint32_t shaderHash = 0;
-    {
-        unique_lock ulock(_hashHandlesMutex);
-        const auto it = _handleToShaderHash.find(handle);
-        if (it == _handleToShaderHash.end())
-            return;
-
-        shaderHash = it->second;
-        _handleToShaderHash.erase(it);
-        _shaderHashes.erase(shaderHash);
-    }
-
-    {
-        unique_lock lock(_collectedActiveHandlesMutex);
-        if (_collectedActiveShaderHashes.erase(shaderHash) > 0) {
-            const auto orderIt = std::find(_collectedActiveShaderOrder.begin(), _collectedActiveShaderOrder.end(), shaderHash);
-            if (orderIt != _collectedActiveShaderOrder.end())
-                _collectedActiveShaderOrder.erase(orderIt);
-        }
-    }
+    unique_lock lock(_hashHandlesMutex);
+    _handleToShaderHash.erase(handle);
+    // Hunting records which hashes were observed during collection, even for transient pipelines.
 }
 
 void ShaderManager::startHuntingMode(const unordered_set<uint32_t> currentMarkedHashes) {

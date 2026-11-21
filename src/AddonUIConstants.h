@@ -1,4 +1,5 @@
 #pragma once
+#include <charconv>
 #include "AddonUIData.h"
 #include "CDataFile.h"
 #include "ShaderManager.h"
@@ -73,7 +74,7 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
         return;
     }
 
-    std::shared_lock<std::shared_mutex> lock(instance.GetConstantHandler()->GetBufferMutex());
+    std::unique_lock<std::shared_mutex> lock(instance.GetConstantHandler()->GetBufferMutex());
 
     const uint32_t columns = 4;
     const char* typeItems[] = { "byte", "float", "int", "uint" };
@@ -84,8 +85,6 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
     int cbModeSelectionIndex = group->getCBIsPushMode() ? 1 : 0;
     const char* cbModeSelection = cbModeItems[cbModeSelectionIndex];
 
-    const uint8_t* bufferContent = instance.GetConstantHandler()->GetConstantBuffer(group);
-    const size_t bufferSize = instance.GetConstantHandler()->GetConstantBufferSize(group);
     auto& varMap = group->GetVarOffsetMapping();
     const size_t offsetInputBufSize = 32;
     static char offsetInputBuf[offsetInputBufSize] = { "000" };
@@ -113,7 +112,9 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
             DrawTableToggleSwitch("##Extractconstantbuffer", &extractionEnabled);
 
             if (!extractionEnabled) {
+                lock.unlock();
                 instance.GetConstantHandler()->RemoveGroup(group, dev);
+                lock.lock();
                 ImGui::BeginDisabled();
             }
 
@@ -201,6 +202,8 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
     ImGui::Spacing();
 
     if (BeginCard("##cb_data_card", "CONSTANT BUFFER DATA")) {
+        const uint8_t* bufferContent = instance.GetConstantHandler()->GetConstantBuffer(group);
+        const size_t bufferSize = instance.GetConstantHandler()->GetConstantBufferSize(group);
         if (bufferContent != nullptr && bufferSize > 0) {
             const float gridHeight = 200.0f;
             if (ImGui::BeginTable("Buffer View Grid##table",
@@ -235,12 +238,15 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
                                 continue;
                             }
 
+                            const size_t element = static_cast<size_t>(i - i / (columns + 1) - 1);
+                            if (element >= elements)
+                                break;
                             std::stringstream sContent;
 
                             if (typeSelectionIndex == 0) {
-                                sContent << std::format("{:02X}", bufferContent[i - i / (columns + 1) - 1]) << std::endl;
+                                sContent << std::format("{:02X}", bufferContent[element]) << std::endl;
                             } else {
-                                uint32_t bufferOffset = (i - i / (columns + 1) - 1) * typeSizes[typeSelectionIndex];
+                                size_t bufferOffset = element * typeSizes[typeSelectionIndex];
 
                                 switch (typeSelectionIndex) {
                                     case 1:
@@ -278,7 +284,6 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
     if (BeginCard("##cb_vars_card", "VARIABLE MAPPINGS")) {
         const float addBtnW = ImGui::CalcTextSize("Add Variable Binding").x + ImGui::GetStyle().FramePadding.x * 2.0f + 14.0f;
         if (!extractionEnabled) {
-            instance.GetConstantHandler()->RemoveGroup(group, dev);
             ImGui::BeginDisabled();
         }
 
@@ -292,7 +297,7 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
 
         ImGui::Separator();
 
-        if (ImGui::BeginPopupModal("Add###const_variables", nullptr, ImGuiWindowFlags_AlwaysAutoResize) && instance.GetRESTVariables()->size() > 0) {
+        if (ImGui::BeginPopupModal("Add###const_variables", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::Text("Add constant buffer offset to variable binding:");
 
             static int varSelectionIndex = 0;
@@ -307,7 +312,9 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
             std::vector<std::string> filteredVars;
             std::copy_if(varNames.begin(), varNames.end(), std::back_inserter(filteredVars), [](const std::string& s) { return !varExclusionSet.contains(s); });
 
-            static std::string varSelectedItem = filteredVars.size() > 0 ? filteredVars[0] : "";
+            static std::string varSelectedItem;
+            if (std::find(filteredVars.begin(), filteredVars.end(), varSelectedItem) == filteredVars.end())
+                varSelectedItem = filteredVars.empty() ? "" : filteredVars.front();
 
             if (ImGui::BeginCombo("Variable", varSelectedItem.c_str(), ImGuiComboFlags_None)) {
                 for (auto& v : filteredVars) {
@@ -333,12 +340,15 @@ static void DisplayConstantTab(AddonImGui::AddonUIData& instance, ShaderToggler:
             ImGui::Separator();
 
             ImGui::SetCursorPosX(ImGui::GetWindowWidth() / 2 - 120 - ImGui::GetStyle().ItemSpacing.x / 2 - ImGui::GetStyle().FramePadding.x / 2);
+            uint32_t offset = 0;
+            const char* end = offsetInputBuf + std::strlen(offsetInputBuf);
+            const auto parsed = std::from_chars(offsetInputBuf, end, offset, 16);
+            ImGui::BeginDisabled(varSelectedItem.empty() || parsed.ec != std::errc{} || parsed.ptr != end);
             if (ImGui::Button("OK", ImVec2(120, 0))) {
-                if (varSelectedItem.size() > 0) {
-                    group->SetVarMapping(std::stoul(std::string(offsetInputBuf), nullptr, 16), varSelectedItem, prevValue);
-                }
+                group->SetVarMapping(offset, varSelectedItem, prevValue);
                 ImGui::CloseCurrentPopup();
             }
+            ImGui::EndDisabled();
             ImGui::SetItemDefaultFocus();
             ImGui::SameLine();
             if (ImGui::Button("Cancel", ImVec2(120, 0))) {

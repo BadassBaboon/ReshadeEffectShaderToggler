@@ -154,7 +154,7 @@ void RenderingBindingManager::_QueueOrDequeue(command_list* cmd_list,
         // A group can be retired (removed in the UI) while its entry is still queued here. Its GPU
         // resources have already been disposed by the removal callback, so drop the entry instead of
         // querying resources for it. (The object itself stays alive so this erase is safe.)
-        if (group->isRetired()) {
+        if (group->isRetired() || !group->isActive()) {
             it = queue.erase(it);
             continue;
         }
@@ -177,7 +177,7 @@ void RenderingBindingManager::_QueueOrDequeue(command_list* cmd_list,
         }
 
         // Queue updates depending on the place their supposed to be called at
-        if (data.resource != 0 && (!callLocation && !data.invocationLocation || callLocation & data.invocationLocation)) {
+        if (data.resource != 0 && callLocation == data.invocationLocation) {
             immediateQueue.insert(group);
         }
 
@@ -205,7 +205,7 @@ void RenderingBindingManager::_UpdateTextureBindings(command_list* cmd_list,
 
             // A group can be retired (removed in the UI) while its entry is still queued here. It is
             // kept alive for exactly this reason, but must not bind anymore.
-            if (group->isRetired()) {
+            if (group->isRetired() || !group->isActive()) {
                 continue;
             }
 

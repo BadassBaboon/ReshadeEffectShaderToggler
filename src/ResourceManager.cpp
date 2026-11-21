@@ -125,31 +125,23 @@ void ResourceManager::OnDestroyResource(device* device, resource res) {
         rShim->OnDestroyResource(device, res);
     }
 
-    if (!in_destroy_device) {
-        std::shared_lock<shared_mutex> lock_view(view_mutex);
-
-        const auto& views = global_resources.find(res.handle);
-
-        if (views != global_resources.end()) {
-            views->second->state = GlobalResourceState::RESOURCE_INVALID;
-        }
-    }
+    auto& cache = device->get_private_data<DeviceDataContainer>()->resourceManagerData;
+    std::unique_lock lock(cache.viewMutex);
+    const auto it = cache.views.find(res.handle);
+    if (it != cache.views.end())
+        it->second->state = GlobalResourceState::RESOURCE_INVALID;
 }
 
 void ResourceManager::OnDestroyDevice(device* device, bool validDevice) {
-    in_destroy_device = true;
-
-    std::unique_lock<shared_mutex> lock_view(view_mutex);
-
-    for (const auto& view : global_resources) {
-        view.second->Dispose(validDevice);
+    auto& cache = device->get_private_data<DeviceDataContainer>()->resourceManagerData;
+    decltype(cache.views) views;
+    {
+        std::unique_lock lock(cache.viewMutex);
+        views.swap(cache.views);
     }
-
-    global_resources.clear();
-
+    for (auto& [handle, view] : views)
+        view->Dispose(validDevice);
     DisposePreview(device);
-
-    in_destroy_device = false;
 }
 
 bool ResourceManager::OnCreateResourceView(device* device, resource resource, resource_usage usage_type, resource_view_desc& desc) {
@@ -164,26 +156,26 @@ void ResourceManager::OnInitResourceView(device* device, resource resource, reso
 
 void ResourceManager::OnDestroyResourceView(device* device, resource_view view) {}
 
-const std::shared_ptr<GlobalResourceView>& ResourceManager::GetResourceView(device* device, const ResourceRenderData& data) {
+std::shared_ptr<GlobalResourceView> ResourceManager::GetResourceView(device* device, const ResourceRenderData& data) {
     return GetResourceView(device, data.resource.handle, data.format);
 }
 
-const std::shared_ptr<GlobalResourceView>& ResourceManager::GetResourceView(device* device, uint64_t handle, reshade::api::format format) {
-    static std::shared_ptr<GlobalResourceView> emptyView{ nullptr };
+std::shared_ptr<GlobalResourceView> ResourceManager::GetResourceView(device* device, uint64_t handle, reshade::api::format format) {
     if (handle == 0) {
-        return emptyView;
+        return {};
     }
 
-    std::unique_lock<shared_mutex> lock_view(view_mutex);
+    auto& cache = device->get_private_data<DeviceDataContainer>()->resourceManagerData;
+    std::unique_lock lock(cache.viewMutex);
 
-    auto& res = global_resources[handle];
+    auto& res = cache.views[handle];
 
     if (res == nullptr) {
         res = std::make_shared<GlobalResourceView>(device, resource{ handle }, format);
     }
 
     if (res->state == GlobalResourceState::RESOURCE_INVALID) {
-        return emptyView;
+        return {};
     }
 
     if (res->state == GlobalResourceState::RESOURCE_VALID)
@@ -231,14 +223,16 @@ void ResourceManager::OnEffectsReloaded(effect_runtime* runtime) {
 
 void ResourceManager::CheckResourceViews(reshade::api::effect_runtime* runtime) {
     if (!effects_reloading) {
-        std::unique_lock<shared_mutex> lock_view(view_mutex);
-        for (auto view = global_resources.begin(); view != global_resources.end();) {
+        auto& cache = runtime->get_device()->get_private_data<DeviceDataContainer>()->resourceManagerData;
+        std::vector<std::shared_ptr<GlobalResourceView>> expired;
+        std::unique_lock lock(cache.viewMutex);
+        for (auto view = cache.views.begin(); view != cache.views.end();) {
             bool referenced = view->second.use_count() > 1;
 
             // valid but not used or just invalid, dispose
             if (view->second->state != GlobalResourceState::RESOURCE_USED && !referenced) {
-                view->second->Dispose();
-                view = global_resources.erase(view);
+                expired.push_back(std::move(view->second));
+                view = cache.views.erase(view);
                 continue;
             }
 
@@ -258,20 +252,20 @@ void ResourceManager::CheckPreview(reshade::api::command_list* cmd_list, reshade
 
     DeviceDataContainer& deviceData = (*device->get_private_data<DeviceDataContainer>());
 
+    std::unique_lock lock(deviceData.binding_mutex);
     if (deviceData.huntPreview.recreate_preview) {
         DisposePreview(device);
         resource_desc desc = deviceData.huntPreview.target_desc;
-        // preview_res[0] (ping) matches the source format so copy_resource(source -> ping) is valid.
-        // preview_res[1] (pong) is ALWAYS R8G8B8A8: it's the buffer the fixed-format copy/alpha-copy
-        // pipeline renders into and that ImGui displays. The pipeline declares R8G8B8A8, so an HDR
-        // pong would mismatch the PSO render-target format and remove the device (the format=10 crash).
-        const reshade::api::format pong_typeless = reshade::api::format::r8g8b8a8_typeless;
-        const reshade::api::format pong_typed = reshade::api::format::r8g8b8a8_unorm;
+        // Vulkan copies the selected subresource directly. D3D draws into an RGBA8 display texture.
+        const bool vulkan = device->get_api() == device_api::vulkan;
+        const auto sourceFormat = vulkan ? desc.texture.format : format_to_typeless(desc.texture.format);
+        const auto pongFormat = vulkan ? sourceFormat : format::r8g8b8a8_typeless;
+        const auto pongViewFormat = vulkan ? deviceData.huntPreview.view_format : format::r8g8b8a8_unorm;
         resource_desc preview_desc[2] = { resource_desc(desc.texture.width,
                                                         desc.texture.height,
                                                         1,
                                                         1,
-                                                        format_to_typeless(desc.texture.format),
+                                                        sourceFormat,
                                                         1,
                                                         memory_heap::default_,
                                                         resource_usage::copy_dest | resource_usage::copy_source | resource_usage::shader_resource |
@@ -280,13 +274,13 @@ void ResourceManager::CheckPreview(reshade::api::command_list* cmd_list, reshade
                                                         desc.texture.height,
                                                         1,
                                                         1,
-                                                        pong_typeless,
+                                                        pongFormat,
                                                         1,
                                                         memory_heap::default_,
                                                         resource_usage::copy_dest | resource_usage::shader_resource | resource_usage::render_target) };
 
         for (uint32_t i = 0; i < 2; i++) {
-            const reshade::api::format view_typed = (i == 0) ? format_to_default_typed(deviceData.huntPreview.view_format, 0) : pong_typed;
+            const reshade::api::format view_typed = (i == 0) ? format_to_default_typed(deviceData.huntPreview.view_format, 0) : pongViewFormat;
 
             if (!device->create_resource(preview_desc[i], nullptr, resource_usage::shader_resource, &deviceData.resourceManagerData.preview_res[i])) {
                 reshade::log::message(reshade::log::level::error, "Failed to create preview render target!");
@@ -346,7 +340,7 @@ void ResourceManager::SetPongPreviewHandles(reshade::api::device* device,
 bool ResourceManager::IsCompatibleWithPreviewFormat(reshade::api::device* device, reshade::api::resource res, reshade::api::format view_format) {
     DeviceDataContainer& deviceData = (*device->get_private_data<DeviceDataContainer>());
 
-    if (deviceData.resourceManagerData.preview_res[0] == 0 || res == 0)
+    if (deviceData.resourceManagerData.preview_res[0] == 0 || deviceData.resourceManagerData.preview_srv[0] == 0 || res == 0)
         return false;
 
     resource_desc res_desc = device->get_resource_desc(res);
@@ -363,7 +357,9 @@ bool ResourceManager::IsCompatibleWithPreviewFormat(reshade::api::device* device
 
 EmbeddedResourceData ResourceManager::GetResourceData(uint16_t id) {
     HMODULE hModule = NULL;
-    GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCTSTR)GetResourceData, &hModule);
+    if (!GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCTSTR)GetResourceData, &hModule))
+        return { nullptr, 0 };
 
     HRSRC myResource = ::FindResource(hModule, MAKEINTRESOURCE(id), RT_RCDATA);
 

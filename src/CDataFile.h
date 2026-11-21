@@ -247,6 +247,8 @@ class CDataFile {
     // to modify the data values, you have to call member functions.
     // think carefully before changing this.
 
+    bool Parse(std::istream& stream);
+
     // GetKey: Returns the requested key (if found) from the requested
     // Section. Returns NULL otherwise.
     t_Key* GetKey(t_Str szKey, t_Str szSection);

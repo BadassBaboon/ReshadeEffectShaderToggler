@@ -66,6 +66,9 @@ void RenderingShaderManager::InitShader(reshade::api::device* device,
             !device->create_pipeline(sh_layout, static_cast<uint32_t>(subobjects.size()), subobjects.data(), &sh_pipeline) ||
             !device->create_sampler(sampler_desc, &sh_sampler)) {
 
+            if (sh_pipeline != 0) device->destroy_pipeline(sh_pipeline);
+            if (sh_layout != 0) device->destroy_pipeline_layout(sh_layout);
+            if (sh_sampler != 0) device->destroy_sampler(sh_sampler);
             sh_pipeline = { 0 };
             sh_layout = { 0 };
             sh_sampler = { 0 };

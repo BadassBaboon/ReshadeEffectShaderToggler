@@ -121,16 +121,16 @@ ToggleGroup::ToggleGroup(const ToggleGroup& other)
     _bindingSrvSlotIndex = other._bindingSrvSlotIndex;
     _bindingSrvDescIndex = other._bindingSrvDescIndex;
     _bindingSrvShaderStage = other._bindingSrvShaderStage;
-    _isActive = other._isActive;
+    _isActive = other._isActive.load();
     _isEditing = other._isEditing;
-    _allowAllTechniques = other._allowAllTechniques;
+    _allowAllTechniques = other._allowAllTechniques.load();
     _isProvidingTextureBinding = other._isProvidingTextureBinding;
     _copyTextureBinding = other._copyTextureBinding;
     _extractConstants = other._extractConstants;
     _extractResourceViews = other._extractResourceViews;
     _clearBindings = other._clearBindings;
     _previewClearAlpha = other._previewClearAlpha;
-    _hasTechniqueExceptions = other._hasTechniqueExceptions;
+    _hasTechniqueExceptions = other._hasTechniqueExceptions.load();
     _tonemapHDRtoSDRtoHDR = other._tonemapHDRtoSDRtoHDR;
     _preserveAlpha = other._preserveAlpha;
     _flipBuffer = other._flipBuffer;
@@ -152,7 +152,6 @@ ToggleGroup::ToggleGroup(const ToggleGroup& other)
     _cbModePush = other._cbModePush;
     _textureBindingName = other._textureBindingName;
     _preferredTechniques = other._preferredTechniques;
-    _preferredTechniqueData = other._preferredTechniqueData;
     _varOffsetMapping = other._varOffsetMapping;
     _cbCycle = other._cbCycle;
     _srvCycle = other._srvCycle;
@@ -240,26 +239,10 @@ std::string ToggleGroup::configurationSignature() const {
     return ss.str();
 }
 
-void ToggleGroup::AssignPreferredTechniqueData(std::unordered_map<std::string, EffectData>& allTechniques) {
-    _preferredTechniqueData.clear();
-
-    for (auto& techName : _preferredTechniques) {
-        const auto& techData = allTechniques.find(techName);
-        if (techData != allTechniques.end()) {
-            _preferredTechniqueData.emplace(&techData->second);
-        }
-    }
-}
-
-const std::unordered_set<EffectData*>& ToggleGroup::GetPreferredTechniqueData() {
-    return _preferredTechniqueData;
-}
-
 int ToggleGroup::getNewGroupId() {
     static atomic_int s_groupId = 0;
 
-    ++s_groupId;
-    return s_groupId;
+    return ++s_groupId;
 }
 
 GroupResource& ToggleGroup::GetGroupResource(GroupResourceType type) {
@@ -519,8 +502,8 @@ void ToggleGroup::loadState(CDataFile& iniFile, int groupCounter) {
 
     _isActive = iniFile.GetBool("Active", sectionRoot);
 
-    const int32_t invocationLocation = iniFile.GetUInt("InvocationLocation", sectionRoot);
-    if (invocationLocation != UINT_MAX) {
+    const uint32_t invocationLocation = iniFile.GetUInt("InvocationLocation", sectionRoot);
+    if (invocationLocation <= 2) {
         _invocationLocation = invocationLocation;
     } else {
         _invocationLocation = 0;
@@ -566,7 +549,7 @@ void ToggleGroup::loadState(CDataFile& iniFile, int groupCounter) {
         _cbDescIndex = 0;
     }
 
-    bool _cbPushMode = iniFile.GetBoolOrDefault("ConstantPushMode", sectionRoot, false);
+    _cbModePush = iniFile.GetBoolOrDefault("ConstantPushMode", sectionRoot, false);
 
     uint32_t shaderStage = iniFile.GetUInt("ConstantShaderStage", sectionRoot);
     if (shaderStage != UINT_MAX && shaderStage < 3) {
@@ -638,7 +621,7 @@ void ToggleGroup::loadState(CDataFile& iniFile, int groupCounter) {
     }
 
     uint32_t bindingInvocationLocation = iniFile.GetUInt("BindingInvocationLocation", sectionRoot);
-    if (bindingInvocationLocation != UINT_MAX) {
+    if (bindingInvocationLocation <= 2) {
         _bindingInvocationLocation = bindingInvocationLocation;
     } else {
         _bindingInvocationLocation = _invocationLocation; // fallback to effect invocation location when loading old configs

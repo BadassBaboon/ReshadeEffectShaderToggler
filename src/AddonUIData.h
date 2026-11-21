@@ -212,7 +212,7 @@ class AddonUIData {
     void SetBasePath(const std::filesystem::path& basePath) { _basePath = basePath; };
     std::filesystem::path GetBasePath() { return _basePath; };
     void SaveShaderTogglerIniFile(const std::string& fileName = HASH_FILE_NAME);
-    void LoadShaderTogglerIniFile(const std::string& fileName = HASH_FILE_NAME);
+    void LoadShaderTogglerIniFile(reshade::api::effect_runtime* runtime = nullptr, const std::string& fileName = HASH_FILE_NAME);
     std::atomic_int& GetToggleGroupIdShaderEditing() { return _toggleGroupIdShaderEditing; }
     std::atomic_int& GetToggleGroupIdEffectEditing() { return _toggleGroupIdEffectEditing; }
     std::atomic_int& GetToggleGroupIdConstantEditing() { return _toggleGroupIdConstantEditing; }
@@ -256,6 +256,5 @@ class AddonUIData {
     bool IsLivePreviewAllowed(reshade::api::device_api api) const { return api != reshade::api::device_api::d3d12 || _livePreviewDX12; }
     void SetShowObservedDraws(bool show) { if (_showObservedDraws != show) { _showObservedDraws = show; MarkConfigDirty(); } }
 
-    void AssignPreferredGroupTechniques(std::unordered_map<std::string, EffectData>& allTechniques);
 };
 }

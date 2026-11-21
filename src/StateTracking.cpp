@@ -10,43 +10,36 @@
 using namespace reshade::api;
 using namespace StateTracking;
 
-bool state_tracking::track_descriptors = true;
+static bool track_descriptors = true;
 
 void state_block::apply_descriptors_dx12_vulkan(command_list* cmd_list) const {
-    uint32_t shader_stages_set = 0;
     for (uint32_t stageIdx = 0; stageIdx < ALL_SHADER_STAGES_SIZE; stageIdx++) {
-        auto& descriptor_data = (*cmd_list->get_device()->get_private_data<descriptor_tracking>());
         const auto& [pipelinelayout, root_table] = root_tables[stageIdx];
         shader_stage stages = root_table_stages[stageIdx];
 
-        // if ((static_cast<uint32_t>(stages) | shader_stages_set) <= shader_stages_set) {
-        //     continue;
-        // }
-        //
-        // shader_stages_set |= static_cast<uint32_t>(stages);
-
         // Restore root signature and descriptor heaps
-        if (pipelinelayout != 0) {
-            cmd_list->bind_descriptor_tables(stages, pipelinelayout, 0, 0, nullptr);
-        } else {
+        if (pipelinelayout == 0)
             continue;
-        }
+        if (cmd_list->get_device()->get_api() == device_api::d3d12)
+            cmd_list->bind_descriptor_tables(stages, pipelinelayout, 0, 0, nullptr);
 
         // Restore tables in first pass to assure heaps are restored, do constants in a second pass,
         // pushed descriptors should be restored along with the tables when the heap is restored to the game internal one
         for (uint32_t i = 0; i < root_table.size(); i++) {
             if (root_table[i].type == root_entry_type::descriptor_table && root_table[i].descriptor_table.handle != 0) {
-                cmd_list->bind_descriptor_tables(stages, pipelinelayout, i, 1, &root_table[i].descriptor_table);
+                const auto& offsets = root_table[i].dynamic_offsets;
+                cmd_list->bind_descriptor_tables2(stages, pipelinelayout, i, 1, &root_table[i].descriptor_table,
+                    static_cast<uint32_t>(offsets.size()), offsets.data());
             }
 
             if (root_table[i].type == root_entry_type::push_constants && root_table[i].buffer_index >= 0 &&
-                constant_buffer[root_table[i].buffer_index].size() > 0) {
+                constant_buffer[stageIdx][root_table[i].buffer_index].size() > 0) {
                 cmd_list->push_constants(stages,
                                          pipelinelayout,
                                          i,
                                          0,
-                                         static_cast<uint32_t>(constant_buffer[root_table[i].buffer_index].size()),
-                                         constant_buffer[root_table[i].buffer_index].data());
+                                         static_cast<uint32_t>(constant_buffer[stageIdx][root_table[i].buffer_index].size()),
+                                         constant_buffer[stageIdx][root_table[i].buffer_index].data());
             }
         }
     }
@@ -128,7 +121,7 @@ void state_block::apply_dx9(reshade::api::command_list* cmd_list, bool force_res
     }
 
     // ???
-    if (!render_targets.empty() || depth_stencil != 0)
+    if (cmd_list->get_device()->get_api() != device_api::vulkan && (!render_targets.empty() || depth_stencil != 0))
         cmd_list->bind_render_targets_and_depth_stencil(static_cast<uint32_t>(render_targets.size()), render_targets.data(), depth_stencil);
 
     if (dx_state != nullptr) {
@@ -144,7 +137,7 @@ void state_block::apply_default(reshade::api::command_list* cmd_list, bool force
         return;
     }
 
-    if (!render_targets.empty() || depth_stencil != 0)
+    if (cmd_list->get_device()->get_api() != device_api::vulkan && (!render_targets.empty() || depth_stencil != 0))
         cmd_list->bind_render_targets_and_depth_stencil(static_cast<uint32_t>(render_targets.size()), render_targets.data(), depth_stencil);
 
     uint32_t pipeline_stages_set = 0;
@@ -196,7 +189,7 @@ void state_block::clear() {
     std::for_each(descriptor_buffer.begin(), descriptor_buffer.end(), [](std::vector<std::vector<descriptor_tracking::descriptor_data>>& v) { v.clear(); });
     current_pipeline.fill(pipeline{ 0 });
     current_pipeline_stage.fill(static_cast<pipeline_stage>(0));
-    resource_barrier_track.clear();
+    trackedResource = {};
 }
 
 void state_block::clear_present(effect_runtime* runtime) {
@@ -230,17 +223,20 @@ static inline int32_t get_pipeline_stage_index(pipeline_stage stages) {
 
 static void on_init_command_list(command_list* cmd_list) {
     cmd_list->create_private_data<state_tracking>();
+    auto& state = *cmd_list->get_private_data<state_tracking>();
+    state.owner_device = cmd_list->get_device();
+    state.inspect_tables = track_descriptors;
 
     auto& deviceState = (*cmd_list->get_device()->get_private_data<DeviceStateTracking>());
     std::unique_lock<std::shared_mutex> lock(deviceState.cmd_list_mutex);
     deviceState.cmd_lists.emplace(cmd_list);
 }
 static void on_destroy_command_list(command_list* cmd_list) {
-    cmd_list->destroy_private_data<state_tracking>();
 
     auto& deviceState = (*cmd_list->get_device()->get_private_data<DeviceStateTracking>());
     std::unique_lock<std::shared_mutex> lock(deviceState.cmd_list_mutex);
     deviceState.cmd_lists.erase(cmd_list);
+    cmd_list->destroy_private_data<state_tracking>();
 }
 
 static void on_bind_render_targets_and_depth_stencil(command_list* cmd_list, uint32_t count, const resource_view* rtvs, resource_view dsv) {
@@ -252,7 +248,9 @@ static void on_bind_render_targets_and_depth_stencil(command_list* cmd_list, uin
 static void on_bind_pipeline(command_list* cmd_list, pipeline_stage stages, pipeline pipeline) {
     auto& state = (*cmd_list->get_private_data<state_tracking>());
 
-    uint32_t idx = get_pipeline_stage_index(stages);
+    const int32_t idx = get_pipeline_stage_index(stages);
+    if (idx < 0)
+        return;
 
     state.current_pipeline[idx] = pipeline;
     state.current_pipeline_stage[idx] = stages;
@@ -338,78 +336,13 @@ static void on_bind_scissor_rects(command_list* cmd_list, uint32_t first, uint32
 }
 
 static void on_bind_descriptor_tables(command_list* cmd_list,
-                                      shader_stage stages,
-                                      pipeline_layout layout,
-                                      uint32_t first,
-                                      uint32_t count,
-                                      const descriptor_table* tables,
-                                      uint32_t /*dynamic_offset_count*/,
-                                      const uint32_t* /*dynamic_offsets*/) {
-    int32_t idx = get_shader_stage_index(stages);
-
-    if (idx < 0)
-        return;
-
-    auto& state_tracker = (*cmd_list->get_private_data<state_tracking>());
-    const auto& descriptor_state = (*cmd_list->get_device()->get_private_data<descriptor_tracking>());
-    auto& [desc_layout, root_table] = state_tracker.root_tables[idx];
-    auto& state_stages = state_tracker.root_table_stages[idx];
-    auto& descriptor_buffer = state_tracker.descriptor_buffer[idx];
-    auto& constant_buffer = state_tracker.constant_buffer[idx];
-
-    if (desc_layout != layout) {
-        root_table.clear(); // Layout changed, which resets all descriptor set bindings
-        descriptor_buffer.clear();
-        constant_buffer.clear();
-    }
-
-    desc_layout = layout;
-    state_stages = stages;
-
-    if (root_table.size() < (first + count))
-        root_table.resize(first + count);
-
-    for (uint32_t i = 0; i < count; ++i) {
-        const pipeline_layout_param param = descriptor_state.get_pipeline_layout_param(layout, first + i);
-        if (param.type != pipeline_layout_param_type::descriptor_table)
-            continue;
-
-        uint32_t max_descriptor_size = 0;
-        for (uint32_t k = 0; k < param.descriptor_table.count; ++k) {
-            const descriptor_range& range = param.descriptor_table.ranges[k];
-            if (range.count != UINT32_MAX && range.type != descriptor_type::sampler)
-                max_descriptor_size = std::max(max_descriptor_size, range.binding + range.count);
-        }
-
-        std::vector<descriptor_tracking::descriptor_data> descriptors(max_descriptor_size);
-
-        for (uint32_t k = 0; k < param.descriptor_table.count; ++k) {
-            const descriptor_range& range = param.descriptor_table.ranges[k];
-
-            if (range.count == UINT32_MAX || range.type == descriptor_type::sampler)
-                continue; // Skip unbounded ranges
-
-            uint32_t base_offset = 0;
-            descriptor_heap heap = { 0 };
-            cmd_list->get_device()->get_descriptor_heap_offset(tables[i], range.binding, 0, &heap, &base_offset);
-
-            descriptor_state.set_all_descriptors(heap, base_offset, range.count, descriptors, range.binding);
-        }
-
-        descriptor_buffer.push_back(std::move(descriptors));
-
-        root_table[i + first] = { root_entry_type::descriptor_table, static_cast<int32_t>(descriptor_buffer.size()) - 1, tables[i] };
-    }
-}
-
-static void on_bind_descriptor_tables_no_track(command_list* cmd_list,
                                                shader_stage stages,
                                                pipeline_layout layout,
                                                uint32_t first,
                                                uint32_t count,
                                                const descriptor_table* tables,
-                                               uint32_t /*dynamic_offset_count*/,
-                                               const uint32_t* /*dynamic_offsets*/) {
+                                               uint32_t dynamic_offset_count,
+                                               const uint32_t* dynamic_offsets) {
     int32_t idx = get_shader_stage_index(stages);
 
     if (idx < 0)
@@ -433,8 +366,17 @@ static void on_bind_descriptor_tables_no_track(command_list* cmd_list,
     if (root_table.size() < (first + count))
         root_table.resize(first + count);
 
+    uint32_t offset = 0;
     for (uint32_t i = 0; i < count; ++i) {
-        root_table[i + first] = tables[i];
+        auto& entry = root_table[i + first];
+        entry = tables[i];
+        if (offset < dynamic_offset_count) {
+            const auto& tracker = *cmd_list->get_device()->get_private_data<descriptor_tracking>();
+            const uint32_t available = dynamic_offset_count - offset;
+            const uint32_t n = i + 1 == count ? available : std::min(available, tracker.dynamic_offset_count(layout, first + i));
+            entry.dynamic_offsets.assign(dynamic_offsets + offset, dynamic_offsets + offset + n);
+            offset += n;
+        }
     }
 }
 
@@ -442,6 +384,7 @@ static inline void fill_descriptors(std::vector<descriptor_tracking::descriptor_
     for (uint32_t i = 0; i < update.count; i++) {
         descriptor_tracking::descriptor_data& descriptor = table[update.binding + i];
 
+        descriptor = {};
         descriptor.type = update.type;
 
         switch (update.type) {
@@ -479,6 +422,11 @@ static void on_push_descriptors(command_list* cmd_list,
     auto& state_stages = state_tracker.root_table_stages[idx];
     auto& descriptor_buffer = state_tracker.descriptor_buffer[idx];
 
+    if (desc_layout != layout) {
+        root_table.clear();
+        state_tracker.descriptor_buffer[idx].clear();
+        state_tracker.constant_buffer[idx].clear();
+    }
     desc_layout = layout;
     state_stages = stages;
 
@@ -489,7 +437,7 @@ static void on_push_descriptors(command_list* cmd_list,
     auto& root_table_entry = root_table[layout_param];
 
     // Initialize table for descriptors
-    if (root_table_entry.type == root_entry_type::undefined) {
+    if (root_table_entry.type != root_entry_type::push_descriptors) {
         std::vector<descriptor_tracking::descriptor_data> buf(update.binding + update.count);
 
         fill_descriptors(buf, update);
@@ -524,6 +472,11 @@ static void on_push_constants(command_list* cmd_list,
     auto& state_stages = state_tracker.root_table_stages[idx];
     auto& constant_buffer = state_tracker.constant_buffer[idx];
 
+    if (desc_layout != layout) {
+        root_table.clear();
+        state_tracker.descriptor_buffer[idx].clear();
+        state_tracker.constant_buffer[idx].clear();
+    }
     desc_layout = layout;
     state_stages = stages;
 
@@ -534,7 +487,7 @@ static void on_push_constants(command_list* cmd_list,
     auto& root_table_entry = root_table[layout_param];
 
     // Not buffered yet, initialize
-    if (root_table_entry.type == root_entry_type::undefined) {
+    if (root_table_entry.type != root_entry_type::push_constants) {
         std::vector<uint32_t> buf(first + count);
 
         for (uint32_t i = 0; i < count; i++) {
@@ -558,30 +511,35 @@ static void on_push_constants(command_list* cmd_list,
     }
 }
 
-const descriptor_tracking::descriptor_data* state_block::get_descriptor_at(uint32_t stageIndex, uint32_t layout_param, uint32_t binding) const {
-    if (root_tables[stageIndex].second.size() > layout_param) {
+descriptor_tracking::descriptor_data state_block::get_descriptor_at(uint32_t stageIndex, uint32_t layout_param, uint32_t binding) const {
+    if (stageIndex < root_tables.size() && root_tables[stageIndex].second.size() > layout_param) {
         const auto& root_entry = root_tables[stageIndex].second[layout_param];
 
-        if ((root_entry.type == root_entry_type::push_descriptors || root_entry.type == root_entry_type::descriptor_table) && root_entry.buffer_index >= 0) {
+        if (inspect_tables && root_entry.type == root_entry_type::descriptor_table && owner_device)
+            return owner_device->get_private_data<descriptor_tracking>()->lookup(owner_device, root_tables[stageIndex].first, layout_param,
+                root_entry.descriptor_table, binding, root_entry.dynamic_offsets);
+        if (root_entry.type == root_entry_type::push_descriptors && root_entry.buffer_index >= 0) {
             const auto& table_entry = descriptor_buffer[stageIndex][root_entry.buffer_index];
 
             if (table_entry.size() > binding) {
-                return &table_entry[binding];
+                return table_entry[binding];
             }
         }
     }
 
-    return nullptr;
+    return {};
 }
 
 const size_t state_block::get_root_table_entry_size_at(uint32_t stageIndex, uint32_t layout_param) const {
-    if (root_tables[stageIndex].second.size() > layout_param) {
+    if (stageIndex < root_tables.size() && root_tables[stageIndex].second.size() > layout_param) {
         const auto& root_entry = root_tables[stageIndex].second[layout_param];
 
-        if ((root_entry.type == root_entry_type::push_descriptors || root_entry.type == root_entry_type::descriptor_table) && root_entry.buffer_index >= 0) {
+        if (inspect_tables && root_entry.type == root_entry_type::descriptor_table && owner_device)
+            return owner_device->get_private_data<descriptor_tracking>()->table_size(root_tables[stageIndex].first, layout_param);
+        if (root_entry.type == root_entry_type::push_descriptors && root_entry.buffer_index >= 0) {
             return descriptor_buffer[stageIndex][root_entry.buffer_index].size();
         } else if (root_entry.type == root_entry_type::push_constants && root_entry.buffer_index >= 0) {
-            return constant_buffer[root_entry.buffer_index].size();
+            return constant_buffer[stageIndex][root_entry.buffer_index].size();
         }
     }
 
@@ -589,11 +547,11 @@ const size_t state_block::get_root_table_entry_size_at(uint32_t stageIndex, uint
 }
 
 const size_t state_block::get_root_table_size_at(uint32_t stageIndex) const {
-    return root_tables[stageIndex].second.size();
+    return stageIndex < root_tables.size() ? root_tables[stageIndex].second.size() : 0;
 }
 
 const std::vector<uint32_t>* state_block::get_constants_at(uint32_t stageIndex, uint32_t layout_param) const {
-    if (root_tables[stageIndex].second.size() > layout_param) {
+    if (stageIndex < root_tables.size() && root_tables[stageIndex].second.size() > layout_param) {
         const auto& root_entry = root_tables[stageIndex].second[layout_param];
 
         if (root_entry.type == root_entry_type::push_constants && root_entry.buffer_index >= 0) {
@@ -617,42 +575,23 @@ static void on_reshade_present(effect_runtime* runtime) {
 }
 
 void state_block::start_resource_barrier_tracking(reshade::api::resource res, reshade::api::resource_usage current_usage) {
-    const auto& restrack = resource_barrier_track.find(res.handle);
-
-    if (restrack != resource_barrier_track.end()) {
-        restrack->second.ref_count++;
-    } else {
-        resource_barrier_track.emplace(res.handle, barrier_track{ current_usage, 1 });
-    }
+    trackedResource = res;
+    trackedUsage = current_usage;
 }
 
-reshade::api::resource_usage state_block::stop_resource_barrier_tracking(reshade::api::resource res) {
-    const auto& restrack = resource_barrier_track.find(res.handle);
-
-    if (restrack != resource_barrier_track.end()) {
-        resource_usage usage = restrack->second.usage;
-
-        restrack->second.ref_count--;
-        if (restrack->second.ref_count <= 0) {
-            resource_barrier_track.erase(res.handle);
-        }
-
-        return usage;
-    }
-
-    return resource_usage::undefined;
+resource_usage state_block::stop_resource_barrier_tracking(resource res) {
+    if (trackedResource != res)
+        return resource_usage::undefined;
+    trackedResource = {};
+    return trackedUsage;
 }
 
 static void on_barrier(command_list* cmd_list, uint32_t count, const resource* resources, const resource_usage* old_states, const resource_usage* new_states) {
-    auto& barrier_track = (*cmd_list->get_private_data<state_tracking>()).resource_barrier_track;
-    if (barrier_track.size() > 0) {
-        for (uint32_t i = 0; i < count; i++) {
-            const auto& restrack = barrier_track.find(resources[i].handle);
-
-            if (restrack != barrier_track.end()) {
-                restrack->second.usage = new_states[i];
-            }
-        }
+    auto& state = *cmd_list->get_private_data<state_tracking>();
+    if (state.trackedResource != 0) {
+        for (uint32_t i = 0; i < count; ++i)
+            if (resources[i] == state.trackedResource)
+                state.trackedUsage = new_states[i];
     }
 }
 
@@ -665,9 +604,6 @@ static void on_destroy_device(device* device) {
 }
 
 void state_tracking::register_events(bool track) {
-    // disable for now
-    track = false;
-
     track_descriptors = track;
     descriptor_tracking::register_events(track);
 
@@ -685,11 +621,7 @@ void state_tracking::register_events(bool track) {
     reshade::register_event<reshade::addon_event::push_descriptors>(on_push_descriptors);
     reshade::register_event<reshade::addon_event::push_constants>(on_push_constants);
 
-    if (track_descriptors) {
-        reshade::register_event<reshade::addon_event::bind_descriptor_tables>(on_bind_descriptor_tables);
-    } else {
-        reshade::register_event<reshade::addon_event::bind_descriptor_tables>(on_bind_descriptor_tables_no_track);
-    }
+    reshade::register_event<reshade::addon_event::bind_descriptor_tables>(on_bind_descriptor_tables);
 
     reshade::register_event<reshade::addon_event::reset_command_list>(on_reset_command_list);
 
@@ -715,11 +647,7 @@ void state_tracking::unregister_events() {
     reshade::unregister_event<reshade::addon_event::push_descriptors>(on_push_descriptors);
     reshade::unregister_event<reshade::addon_event::push_constants>(on_push_constants);
 
-    if (track_descriptors) {
-        reshade::unregister_event<reshade::addon_event::bind_descriptor_tables>(on_bind_descriptor_tables);
-    } else {
-        reshade::unregister_event<reshade::addon_event::bind_descriptor_tables>(on_bind_descriptor_tables_no_track);
-    }
+    reshade::unregister_event<reshade::addon_event::bind_descriptor_tables>(on_bind_descriptor_tables);
 
     reshade::unregister_event<reshade::addon_event::reset_command_list>(on_reset_command_list);
 

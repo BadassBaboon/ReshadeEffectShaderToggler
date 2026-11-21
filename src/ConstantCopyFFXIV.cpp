@@ -28,17 +28,20 @@ bool ConstantCopyFFXIV::UnInit() {
     return MH_Uninitialize() == MH_OK;
 }
 
-void ConstantCopyFFXIV::GetHostConstantBuffer(command_list* cmd_list,
+bool ConstantCopyFFXIV::GetHostConstantBuffer(command_list* cmd_list,
                                               ShaderToggler::ToggleGroup* group,
                                               vector<uint8_t>& dest,
                                               size_t size,
-                                              uint64_t resourceHandle) {
+                                              uint64_t resourceHandle, uint64_t offset) {
     const auto& ff = _hostResourceBufferMap.find(resourceHandle);
     if (ff != _hostResourceBufferMap.end()) {
         auto& [buffer, bufHandle, bufSize, mapped] = _hostResourceBuffer[ff->second];
-        size_t minSize = std::min(size, bufSize);
-        memcpy(dest.data(), buffer, minSize);
+        if (buffer && mapped && offset <= bufSize && size <= bufSize - offset) {
+            memcpy(dest.data(), static_cast<const uint8_t*>(buffer) + offset, size);
+            return true;
+        }
     }
+    return false;
 }
 
 inline void ConstantCopyFFXIV::set_host_resource_data_location(void* origin, size_t len, int64_t resource_handle, size_t index) {

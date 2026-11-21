@@ -113,7 +113,7 @@ static uint32_t calculateShaderHash(void* shaderData) {
     }
 
     const auto shaderDesc = *static_cast<shader_desc*>(shaderData);
-    return compute_crc32(static_cast<const uint8_t*>(shaderDesc.code), shaderDesc.code_size);
+    return shaderDesc.code && shaderDesc.code_size ? compute_crc32(static_cast<const uint8_t*>(shaderDesc.code), shaderDesc.code_size) : 0;
 }
 
 static void onInitDevice(device* device) {
@@ -197,21 +197,10 @@ static void onReshadeReloadedEffects(effect_runtime* runtime) {
     RestDiag::Log("ReShade reloaded effects");
     RestDiag::RequestDetail();
 
-    RuntimeDataContainer& runtimeData = (*runtime->get_private_data<RuntimeDataContainer>());
-    DeviceDataContainer& deviceData = (*runtime->get_device()->get_private_data<DeviceDataContainer>());
-
-    {
-        unique_lock<shared_mutex> renderLock(deviceData.render_mutex);
-        deviceData.vulkanAutoPendingEffects.clear();
-        deviceData.vulkanAutoWorkPending.store(false, std::memory_order_release);
-    }
-
+    auto& deviceData = *runtime->get_device()->get_private_data<DeviceDataContainer>();
+    unique_lock lock(deviceData.render_mutex);
+    deviceData.InvalidateEffectQueues();
     techniqueManager.OnReshadeReloadedEffects(runtime);
-
-    if (deviceData.current_runtime == runtime) {
-        shared_lock<shared_mutex> techLock(runtimeData.technique_mutex);
-        g_addonUIData.AssignPreferredGroupTechniques(runtimeData.allTechniques);
-    }
 }
 
 static bool onReshadeSetTechniqueState(effect_runtime* runtime, effect_technique technique, bool enabled) {
@@ -223,17 +212,7 @@ static bool onReshadeSetTechniqueState(effect_runtime* runtime, effect_technique
 }
 
 static bool onReshadeReorderTechniques(effect_runtime* runtime, size_t count, effect_technique* techniques) {
-    RuntimeDataContainer& runtimeData = (*runtime->get_private_data<RuntimeDataContainer>());
-    DeviceDataContainer& deviceData = (*runtime->get_device()->get_private_data<DeviceDataContainer>());
-
-    bool ret = techniqueManager.OnReshadeReorderTechniques(runtime, count, techniques);
-
-    if (deviceData.current_runtime == runtime) {
-        shared_lock<shared_mutex> techLock(runtimeData.technique_mutex);
-        g_addonUIData.AssignPreferredGroupTechniques(runtimeData.allTechniques);
-    }
-
-    return ret;
+    return techniqueManager.OnReshadeReorderTechniques(runtime, count, techniques);
 }
 
 static void onInitEffectRuntime(effect_runtime* runtime) {
@@ -245,7 +224,11 @@ static void onInitEffectRuntime(effect_runtime* runtime) {
 
     // Push new runtime on top
     runtimes.push_back(runtime);
-    data.current_runtime = runtime;
+    {
+        unique_lock lock(data.render_mutex);
+        data.InvalidateEffectQueues();
+        data.current_runtime = runtime;
+    }
 
     renderingBindingManager.InitTextureBingings(runtime);
 
@@ -291,7 +274,9 @@ static void onDestroyEffectRuntime(effect_runtime* runtime) {
     }
 
     // Pick the runtime on top of our stack if there are any
+    unique_lock runtimeLock(data.render_mutex);
     if (runtime == data.current_runtime) {
+        data.InvalidateEffectQueues();
         const auto nextRuntime = std::find_if(runtimes.rbegin(), runtimes.rend(), [device](effect_runtime* candidate) {
             return candidate->get_device() == device;
         });
@@ -317,6 +302,8 @@ static void onDestroyEffectRuntime(effect_runtime* runtime) {
 static void onInitPipeline(device* device, pipeline_layout, uint32_t subobjectCount, const pipeline_subobject* subobjects, pipeline pipelineHandle) {
     // shader has been created, we will now create a hash and store it with the handle we got.
     for (uint32_t i = 0; i < subobjectCount; ++i) {
+        if (subobjects[i].count == 0)
+            continue;
         switch (subobjects[i].type) {
             case pipeline_subobject_type::vertex_shader: {
                 g_vertexShaderManager.addHashHandlePair(calculateShaderHash(subobjects[i].data), pipelineHandle.handle);
@@ -338,7 +325,7 @@ static void onDestroyPipeline(device* device, pipeline pipelineHandle) {
 }
 
 static void onBindPipeline(command_list* commandList, pipeline_stage stages, pipeline pipelineHandle) {
-    if (nullptr == commandList || pipelineHandle.handle == 0 ||
+    if (nullptr == commandList ||
         !((uint32_t)(stages & pipeline_stage::pixel_shader) || (uint32_t)(stages & pipeline_stage::vertex_shader) ||
           (uint32_t)(stages & pipeline_stage::compute_shader))) {
         return;
@@ -351,21 +338,23 @@ static void onBindPipeline(command_list* commandList, pipeline_stage stages, pip
     const uint32_t handleHasComputeShaderAttached =
       (uint32_t)(stages & pipeline_stage::compute_shader) ? g_computeShaderManager.safeGetShaderHash(pipelineHandle.handle) : 0;
 
-    if (!handleHasPixelShaderAttached && !handleHasVertexShaderAttached && !handleHasComputeShaderAttached) {
-        // draw call with unknown handle, don't collect it
-        return;
-    }
     CommandListDataContainer& commandListData = (*commandList->get_private_data<CommandListDataContainer>());
     DeviceDataContainer& deviceData = (*commandList->get_device()->get_private_data<DeviceDataContainer>());
 
     if (deviceData.current_runtime == nullptr || !deviceData.current_runtime->get_effects_state()) {
+        if (commandListData.commandQueue || commandListData.ps.activeShaderHash || commandListData.vs.activeShaderHash || commandListData.cs.activeShaderHash) {
+            commandListData.commandQueue = 0;
+            commandListData.ps.Reset();
+            commandListData.vs.Reset();
+            commandListData.cs.Reset();
+        }
         return;
     }
 
     uint32_t pipelineChanged = 0;
 
-    if ((uint32_t)(stages & pipeline_stage::pixel_shader) && handleHasPixelShaderAttached) {
-        if (g_activeCollectorFrameCounter > 0) {
+    if ((uint32_t)(stages & pipeline_stage::pixel_shader)) {
+        if (handleHasPixelShaderAttached && g_activeCollectorFrameCounter > 0) {
             // in collection mode
             g_pixelShaderManager.addActivePipelineHandle(pipelineHandle.handle);
         }
@@ -374,12 +363,15 @@ static void onBindPipeline(command_list* commandList, pipeline_stage stages, pip
             commandListData.ps.constantBuffersToUpdate.clear();
         }
 
-        commandListData.ps.blockedShaderGroups = g_addonUIData.GetToggleGroupsForPixelShaderHash(handleHasPixelShaderAttached);
+        if (handleHasPixelShaderAttached)
+            commandListData.ps.blockedShaderGroups = g_addonUIData.GetToggleGroupsForPixelShaderHash(handleHasPixelShaderAttached);
+        else
+            commandListData.ps.blockedShaderGroups.clear();
         commandListData.ps.activeShaderHash = handleHasPixelShaderAttached;
     }
 
-    if ((uint32_t)(stages & pipeline_stage::vertex_shader) && handleHasVertexShaderAttached) {
-        if (g_activeCollectorFrameCounter > 0) {
+    if ((uint32_t)(stages & pipeline_stage::vertex_shader)) {
+        if (handleHasVertexShaderAttached && g_activeCollectorFrameCounter > 0) {
             // in collection mode
             g_vertexShaderManager.addActivePipelineHandle(pipelineHandle.handle);
         }
@@ -388,12 +380,15 @@ static void onBindPipeline(command_list* commandList, pipeline_stage stages, pip
             commandListData.vs.constantBuffersToUpdate.clear();
         }
 
-        commandListData.vs.blockedShaderGroups = g_addonUIData.GetToggleGroupsForVertexShaderHash(handleHasVertexShaderAttached);
+        if (handleHasVertexShaderAttached)
+            commandListData.vs.blockedShaderGroups = g_addonUIData.GetToggleGroupsForVertexShaderHash(handleHasVertexShaderAttached);
+        else
+            commandListData.vs.blockedShaderGroups.clear();
         commandListData.vs.activeShaderHash = handleHasVertexShaderAttached;
     }
 
-    if ((uint32_t)(stages & pipeline_stage::compute_shader) && handleHasComputeShaderAttached) {
-        if (g_activeCollectorFrameCounter > 0) {
+    if ((uint32_t)(stages & pipeline_stage::compute_shader)) {
+        if (handleHasComputeShaderAttached && g_activeCollectorFrameCounter > 0) {
             // in collection mode
             g_computeShaderManager.addActivePipelineHandle(pipelineHandle.handle);
         }
@@ -402,26 +397,23 @@ static void onBindPipeline(command_list* commandList, pipeline_stage stages, pip
             commandListData.cs.constantBuffersToUpdate.clear();
         }
 
-        commandListData.cs.blockedShaderGroups = g_addonUIData.GetToggleGroupsForComputeShaderHash(handleHasComputeShaderAttached);
+        if (handleHasComputeShaderAttached)
+            commandListData.cs.blockedShaderGroups = g_addonUIData.GetToggleGroupsForComputeShaderHash(handleHasComputeShaderAttached);
+        else
+            commandListData.cs.blockedShaderGroups.clear();
         commandListData.cs.activeShaderHash = handleHasComputeShaderAttached;
     }
 
     if (pipelineChanged > 0) {
-        // Perform updates scheduled for after a shader has been applied. Only do so once the draw flag has been cleared.
-        if (commandListData.commandQueue & Rendering::CHECK_MATCH_BIND_PIPELINE_PREVIEW &&
-            !(commandListData.commandQueue & pipelineChanged & Rendering::MATCH_PREVIEW)) {
-            renderingPreviewManager.UpdatePreview(commandList, Rendering::CALL_BIND_PIPELINE, pipelineChanged & Rendering::MATCH_PREVIEW);
-        }
-
-        if (commandListData.commandQueue & Rendering::CHECK_MATCH_BIND_PIPELINE_BINDING &&
-            !(commandListData.commandQueue & pipelineChanged & Rendering::MATCH_BINDING)) {
-            renderingBindingManager.UpdateTextureBindings(commandList, Rendering::CALL_BIND_PIPELINE, pipelineChanged & Rendering::MATCH_BINDING);
-        }
-
-        if (commandListData.commandQueue & Rendering::CHECK_MATCH_BIND_PIPELINE_EFFECT &&
-            !(commandListData.commandQueue & pipelineChanged & Rendering::MATCH_EFFECT)) {
-            renderingEffectManager.RenderEffects(commandList, Rendering::CALL_BIND_PIPELINE, pipelineChanged & Rendering::MATCH_EFFECT);
-        }
+        // Each stage can have a different pending draw when a combined pipeline changes.
+        const uint64_t ready = pipelineChanged & ~commandListData.commandQueue &
+            (commandListData.commandQueue >> (Rendering::CALL_BIND_PIPELINE * Rendering::MATCH_DELIMITER));
+        if (ready & Rendering::MATCH_PREVIEW)
+            renderingPreviewManager.UpdatePreview(commandList, Rendering::CALL_BIND_PIPELINE, ready & Rendering::MATCH_PREVIEW);
+        if (ready & Rendering::MATCH_BINDING)
+            renderingBindingManager.UpdateTextureBindings(commandList, Rendering::CALL_BIND_PIPELINE, ready & Rendering::MATCH_BINDING);
+        if (ready & Rendering::MATCH_EFFECT)
+            renderingEffectManager.RenderEffects(commandList, Rendering::CALL_BIND_PIPELINE, ready & Rendering::MATCH_EFFECT);
 
         renderingQueueManager.ClearQueue(commandListData, pipelineChanged);
         renderingQueueManager.CheckCallForCommandList(commandList);
@@ -507,6 +499,8 @@ static bool onBeginRenderPass(command_list* cmd_list, uint32_t count, const rend
         }
         return false;
     }
+
+    commandListData.hasDrawGeometry = false; // The upcoming draw counts are unknown at pass begin.
 
     if (vulkan) {
         const bool safeVulkanBoundary = !commandListData.vulkanInsideRenderPass && !resumesPass;
@@ -639,10 +633,13 @@ static void onReshadePresent(effect_runtime* runtime) {
 
     techniqueManager.OnReshadePresent(runtime);
 
-    deviceData.bindingsUpdated.clear();
-    deviceData.constantsUpdated.clear();
-    renderingPreviewManager.CancelDeferredVulkanPreview(dev);
-    deviceData.huntPreview.Reset();
+    {
+        unique_lock lock(deviceData.binding_mutex);
+        deviceData.bindingsUpdated.clear();
+        deviceData.constantsUpdated.clear();
+        deviceData.vulkanPreviewWorkPending.store(false, std::memory_order_release);
+        deviceData.huntPreview.Reset();
+    }
 
     CheckHotkeys(g_addonUIData, runtime);
 
@@ -690,55 +687,43 @@ static void ensure_reshade_docking() {
     std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     in.close();
 
-    // Dynamically find active DockId from [Window][###home] or [Window][###addons]
+    const auto overlay = content.find("[OVERLAY]");
+    if (overlay == std::string::npos) return;
+    const auto nextSection = content.find("\n[", overlay);
+    const auto window = content.find("\nWindow=", overlay);
+    if (window == std::string::npos || window >= nextSection) return;
+
+    const auto eol = content.find_first_of("\r\n", window + 1);
+    const auto length = eol == std::string::npos ? content.size() - window : eol - window;
+    std::string layout = content.substr(window, length);
+    auto dockValue = [&](size_t section) {
+        if (section == std::string::npos) return std::string::npos;
+        const auto next = layout.find(",[", section);
+        const auto key = layout.find(",DockId=", section);
+        return key < next ? key + 8 : std::string::npos;
+    };
     std::string targetDockId = "0x00000001";
-    size_t homePos = content.find("[Window][###home]");
-    if (homePos == std::string::npos) homePos = content.find("[Window][###addons]");
-    if (homePos != std::string::npos) {
-        size_t dockIdPos = content.find("DockId=", homePos);
-        if (dockIdPos != std::string::npos) {
-            dockIdPos += 7; // strlen("DockId=")
-            size_t commaPos = content.find_first_of(",\r\n", dockIdPos);
-            if (commaPos != std::string::npos) {
-                targetDockId = content.substr(dockIdPos, commaPos - dockIdPos);
-            }
-        }
-    }
+    auto source = dockValue(layout.find("[Window][###home]"));
+    if (source == std::string::npos)
+        source = dockValue(layout.find("[Window][###addons]"));
+    if (source != std::string::npos)
+        targetDockId = layout.substr(source, layout.find(',', source) - source);
 
-    const std::string restTag = "[Window][REST]";
-    size_t restPos = content.find(restTag);
+    const auto rest = layout.find("[Window][REST]");
     bool modified = false;
-
-    if (restPos != std::string::npos) {
-        // [Window][REST] already exists: verify its DockId matches targetDockId
-        size_t dockIdPos = content.find("DockId=", restPos);
-        if (dockIdPos != std::string::npos) {
-            dockIdPos += 7;
-            size_t commaPos = content.find_first_of(",\r\n", dockIdPos);
-            if (commaPos != std::string::npos) {
-                std::string curDockId = content.substr(dockIdPos, commaPos - dockIdPos);
-                if (curDockId != targetDockId) {
-                    content.replace(dockIdPos, commaPos - dockIdPos, targetDockId);
-                    modified = true;
-                }
-            }
-        }
-    } else {
-        size_t overlay_pos = content.find("[OVERLAY]");
-        if (overlay_pos != std::string::npos) {
-            size_t window_pos = content.find("Window=", overlay_pos);
-            if (window_pos != std::string::npos) {
-                size_t eol = content.find_first_of("\r\n", window_pos);
-                if (eol == std::string::npos) eol = content.length();
-
-                const std::string entry = ",[Window][REST],Pos=8,,8,Size=1246,,1424,Collapsed=0,DockId=" + targetDockId + ",,6";
-                content.insert(eol, entry);
-                modified = true;
-            }
+    if (rest == std::string::npos) {
+        layout += ",[Window][REST],Pos=8,,8,Size=1246,,1424,Collapsed=0,DockId=" + targetDockId + ",,6";
+        modified = true;
+    } else if (const auto value = dockValue(rest); value != std::string::npos) {
+        const auto count = layout.find(',', value) - value;
+        if (layout.compare(value, count, targetDockId) != 0) {
+            layout.replace(value, count, targetDockId);
+            modified = true;
         }
     }
 
     if (modified) {
+        content.replace(window, length, layout);
         std::ofstream out(ini_path, std::ios::trunc);
         if (out.is_open()) {
             out << content;
@@ -763,8 +748,10 @@ static void Init() {
 
     g_addonUIData.AddToggleGroupRemovalCallback(
       std::bind(&Rendering::ToggleGroupResourceManager::ToggleGroupRemoved, &groupResourceManager, std::placeholders::_1, std::placeholders::_2));
-    techniqueManager.AddEffectsReloadingCallback(std::bind(&Shim::Constants::ConstantHandlerBase::OnEffectsReloading, constantHandler, std::placeholders::_1));
-    techniqueManager.AddEffectsReloadedCallback(std::bind(&Shim::Constants::ConstantHandlerBase::OnEffectsReloaded, constantHandler, std::placeholders::_1));
+    if (constantHandler != nullptr) {
+        techniqueManager.AddEffectsReloadingCallback(std::bind(&Shim::Constants::ConstantHandlerBase::OnEffectsReloading, constantHandler, std::placeholders::_1));
+        techniqueManager.AddEffectsReloadedCallback(std::bind(&Shim::Constants::ConstantHandlerBase::OnEffectsReloaded, constantHandler, std::placeholders::_1));
+    }
     techniqueManager.AddEffectsReloadingCallback(std::bind(&Rendering::ResourceManager::OnEffectsReloading, &resourceManager, std::placeholders::_1));
     techniqueManager.AddEffectsReloadedCallback(std::bind(&Rendering::ResourceManager::OnEffectsReloaded, &resourceManager, std::placeholders::_1));
 }
@@ -778,7 +765,7 @@ static void CheckDrawCall(command_list* cmd_list, const uint64_t match_modifier 
 
     if (commandListData.commandQueue & Rendering::MATCH_ALL & match_modifier) {
         if (constantHandler != nullptr && (commandListData.commandQueue & Rendering::MATCH_CONST & match_modifier)) {
-            constantHandler->UpdateConstants(cmd_list);
+            constantHandler->UpdateConstants(cmd_list, match_modifier);
             commandListData.commandQueue &= ~(Rendering::MATCH_CONST & match_modifier);
         }
 

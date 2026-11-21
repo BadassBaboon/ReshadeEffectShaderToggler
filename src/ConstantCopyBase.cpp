@@ -11,17 +11,21 @@ ConstantCopyBase::ConstantCopyBase() {}
 
 ConstantCopyBase::~ConstantCopyBase() {}
 
-void ConstantCopyBase::GetHostConstantBuffer(reshade::api::command_list* cmd_list,
+bool ConstantCopyBase::GetHostConstantBuffer(reshade::api::command_list* cmd_list,
                                              ShaderToggler::ToggleGroup* group,
                                              vector<uint8_t>& dest,
                                              size_t size,
-                                             uint64_t resourceHandle) {
+                                             uint64_t resourceHandle, uint64_t offset) {
     shared_lock<shared_mutex> lock(deviceHostMutex);
     const auto& it = deviceToHostConstantBuffer.find(resourceHandle);
     if (it != deviceToHostConstantBuffer.end()) {
         auto& [_, buffer] = *it;
-        std::memcpy(dest.data(), buffer.data(), size);
+        if (offset <= buffer.size() && size <= buffer.size() - offset && size <= dest.size()) {
+            std::memcpy(dest.data(), buffer.data() + offset, size);
+            return true;
+        }
     }
+    return false;
 }
 
 void ConstantCopyBase::CreateHostConstantBuffer(device* dev, resource resource, size_t size) {
@@ -34,12 +38,13 @@ void ConstantCopyBase::DeleteHostConstantBuffer(resource resource) {
     deviceToHostConstantBuffer.erase(resource.handle);
 }
 
-inline void ConstantCopyBase::SetHostConstantBuffer(const uint64_t handle, const void* buffer, size_t size, uintptr_t offset, uint64_t bufferSize) {
+void ConstantCopyBase::SetHostConstantBuffer(const uint64_t handle, const void* buffer, size_t size, uint64_t offset, uint64_t bufferSize) {
     unique_lock<shared_mutex> lock(deviceHostMutex);
     const auto& it = deviceToHostConstantBuffer.find(handle);
     if (it != deviceToHostConstantBuffer.end()) {
         auto& [_, cBuffer] = *it;
-        memcpy(&cBuffer[offset], buffer, size);
+        if (offset < cBuffer.size() && size <= cBuffer.size() - offset)
+            std::memmove(cBuffer.data() + offset, buffer, size);
     }
 }
 

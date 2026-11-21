@@ -1,4 +1,4 @@
-#include "ReShade.fxh"
+#include "REST_Common.fxh"
 
 //By Krzysztof Narkowicz (https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/)
 float3 ACESFilm(float3 x)
@@ -23,14 +23,14 @@ float3 ACESFilmInv(float3 x)
 
 void TonemapHDRtoSDR(in float4 pos : SV_Position, in float2 texcoord : Texcoord, out float4 o : SV_Target0)
 {
-    float4 color = tex2D(ReShade::BackBuffer, texcoord);
+    float4 color = tex2D(REST_BackBuffer, texcoord);
     color.rgb = ACESFilm(color.rgb);
     o = color;
 }
 
 void TonemapSDRtoHDR(in float4 pos : SV_Position, in float2 texcoord : Texcoord, out float4 o : SV_Target0)
 {
-    float4 color = tex2D(ReShade::BackBuffer, texcoord);
+    float4 color = tex2D(REST_BackBuffer, texcoord);
     color.rgb = ACESFilmInv(saturate(color.rgb));
     o = color;
 }
@@ -39,7 +39,7 @@ technique REST_TONEMAP_TO_SDR
 {
     pass
     {
-        VertexShader = PostProcessVS;
+        VertexShader = REST_FullscreenVS;
         PixelShader = TonemapHDRtoSDR; 
     }
 }
@@ -48,7 +48,7 @@ technique REST_TONEMAP_TO_HDR
 {
     pass
     {
-        VertexShader = PostProcessVS;
+        VertexShader = REST_FullscreenVS;
         PixelShader = TonemapSDRtoHDR; 
     }
 }

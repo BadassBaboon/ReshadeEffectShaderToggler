@@ -29,6 +29,7 @@ void RenderingPreviewManager::RecordVulkanHuntedTarget(command_list* cmd_list, u
     if (deviceData.current_runtime == nullptr || uiData.GetToggleGroupIdShaderEditing() < 0)
         return;
 
+    unique_lock lock(deviceData.binding_mutex);
     HuntPreview& preview = deviceData.huntPreview;
     if (preview.vulkan_capture_pending)
         return;
@@ -84,6 +85,7 @@ void RenderingPreviewManager::CaptureDeferredVulkanPreview(command_list* cmd_lis
 
     device* device = cmd_list->get_device();
     DeviceDataContainer& deviceData = (*device->get_private_data<DeviceDataContainer>());
+    unique_lock lock(deviceData.binding_mutex);
     HuntPreview& preview = deviceData.huntPreview;
 
     if (!preview.vulkan_capture_pending || preview.target == 0 || preview.vulkan_command_list != cmd_list)
@@ -97,7 +99,7 @@ void RenderingPreviewManager::CaptureDeferredVulkanPreview(command_list* cmd_lis
     state_tracking& trackedState = (*cmd_list->get_private_data<state_tracking>());
     resource_usage sourceUsage = trackedState.stop_resource_barrier_tracking(preview.target);
     if (sourceUsage == resource_usage::undefined)
-        sourceUsage = resource_usage::render_target;
+        return; // The owning command list was reset or replaced.
 
     const resource_desc desc = device->get_resource_desc(preview.target);
 
@@ -136,7 +138,7 @@ void RenderingPreviewManager::CaptureDeferredVulkanPreview(command_list* cmd_lis
         cmd_list->barrier(preview.target, sourceUsage, resource_usage::copy_source);
 
     cmd_list->barrier(previewPong, resource_usage::shader_resource, resource_usage::copy_dest);
-    cmd_list->copy_resource(preview.target, previewPong);
+    cmd_list->copy_texture_region(preview.target, 0, nullptr, previewPong, 0, nullptr);
     cmd_list->barrier(previewPong, resource_usage::copy_dest, resource_usage::shader_resource);
 
     if (sourceUsage != resource_usage::copy_source)
@@ -144,22 +146,6 @@ void RenderingPreviewManager::CaptureDeferredVulkanPreview(command_list* cmd_lis
 
     preview.matched = true;
     preview.status = "Captured at safe Vulkan render-pass boundary";
-}
-
-void RenderingPreviewManager::CancelDeferredVulkanPreview(device* device) {
-    if (device == nullptr || device->get_api() != device_api::vulkan)
-        return;
-
-    DeviceDataContainer& deviceData = (*device->get_private_data<DeviceDataContainer>());
-    HuntPreview& preview = deviceData.huntPreview;
-
-    if (preview.vulkan_capture_pending && preview.target != 0 && preview.vulkan_command_list != nullptr) {
-        (*preview.vulkan_command_list->get_private_data<state_tracking>()).stop_resource_barrier_tracking(preview.target);
-    }
-
-    preview.vulkan_capture_pending = false;
-    deviceData.vulkanPreviewWorkPending.store(false, std::memory_order_release);
-    preview.vulkan_command_list = nullptr;
 }
 
 void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t callLocation, uint64_t invocation) {
@@ -171,6 +157,7 @@ void RenderingPreviewManager::UpdatePreview(command_list* cmd_list, uint64_t cal
     CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
     DeviceDataContainer& deviceData = (*device->get_private_data<DeviceDataContainer>());
 
+    unique_lock lock(deviceData.binding_mutex);
     // Remove call location from queue
     commandListData.commandQueue &= ~(invocation << (callLocation * MATCH_DELIMITER));
 

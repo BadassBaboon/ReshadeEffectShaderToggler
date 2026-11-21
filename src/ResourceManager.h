@@ -63,8 +63,8 @@ class __declspec(novtable) ResourceManager final {
     void OnEffectsReloading(reshade::api::effect_runtime* runtime);
     void OnEffectsReloaded(reshade::api::effect_runtime* runtime);
 
-    const std::shared_ptr<GlobalResourceView>& GetResourceView(reshade::api::device* device, const ResourceRenderData& data);
-    const std::shared_ptr<GlobalResourceView>& GetResourceView(reshade::api::device* device,
+    std::shared_ptr<GlobalResourceView> GetResourceView(reshade::api::device* device, const ResourceRenderData& data);
+    std::shared_ptr<GlobalResourceView> GetResourceView(reshade::api::device* device,
                                                                uint64_t handle,
                                                                reshade::api::format format = reshade::api::format::unknown);
     void CheckResourceViews(reshade::api::effect_runtime* runtime);
@@ -76,14 +76,8 @@ class __declspec(novtable) ResourceManager final {
 
     ResourceShimType _shimType = ResourceShimType::Resource_Shim_None;
     Shim::Resources::ResourceShim* rShim = nullptr;
-    bool in_destroy_device = false;
 
-    bool effects_reloading = false;
+    std::atomic_bool effects_reloading = false;
 
-    std::shared_mutex resource_mutex;
-    std::shared_mutex view_mutex;
-
-    std::unordered_map<uint64_t, std::shared_ptr<GlobalResourceView>> global_resources;
-    std::unordered_set<uint64_t> resources;
 };
 }

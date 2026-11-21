@@ -9,83 +9,52 @@
 
 using namespace reshade::api;
 
-sampler descriptor_tracking::get_sampler(descriptor_heap heap, uint32_t offset) const {
-    const descriptor_heap_data& heap_data = heaps.at(heap);
+const descriptor_tracking::table_info* descriptor_tracking::find_table(pipeline_layout layout, uint32_t slot) const {
+    const auto it = layouts.find(layout.handle);
+    return it != layouts.end() && slot < it->second.size() ? &it->second[slot] : nullptr;
+}
 
-    if (offset < heap_data.descriptors.size()) {
-        const descriptor_data& descriptor = heap_data.descriptors[offset];
+uint32_t descriptor_tracking::table_size(pipeline_layout layout, uint32_t slot) const {
+    std::shared_lock lock(mutex);
+    const auto* table = find_table(layout, slot);
+    return table ? table->size : 0;
+}
 
-        if (descriptor.type == descriptor_type::sampler)
-            return descriptor.sampler;
-        else if (descriptor.type == descriptor_type::sampler_with_resource_view)
-            return descriptor.sampler_and_view.sampler;
+uint32_t descriptor_tracking::dynamic_offset_count(pipeline_layout layout, uint32_t slot) const {
+    std::shared_lock lock(mutex);
+    const auto* table = find_table(layout, slot);
+    return table ? table->dynamic_count : 0;
+}
+
+static bool is_dynamic(descriptor_type type) {
+    return type == descriptor_type::constant_buffer_with_dynamic_offset || type == descriptor_type::shader_storage_buffer_with_dynamic_offset;
+}
+
+descriptor_tracking::descriptor_data descriptor_tracking::lookup(device* device, pipeline_layout layout, uint32_t slot,
+    descriptor_table table, uint32_t index, const std::vector<uint32_t>& dynamic_offsets) const {
+    std::shared_lock lock(mutex);
+    const auto* info = find_table(layout, slot);
+    if (info == nullptr || table == 0)
+        return {};
+    for (const auto& entry : info->ranges) {
+        if (index < entry.first || index - entry.first >= entry.range.count)
+            continue;
+        descriptor_heap heap{};
+        uint32_t base = 0;
+        device->get_descriptor_heap_offset(table, entry.range.binding, 0, &heap, &base);
+        const auto pool = heaps.find(heap.handle);
+        if (pool == heaps.end())
+            break;
+        const uint32_t element = index - entry.first;
+        const auto it = pool->second.find(base + element);
+        if (it == pool->second.end())
+            break;
+        auto result = it->second;
+        if (is_dynamic(entry.range.type) && entry.first_dynamic_offset + element < dynamic_offsets.size())
+            result.constant.offset += dynamic_offsets[entry.first_dynamic_offset + element];
+        return result;
     }
-
-    return { 0 };
-}
-resource_view descriptor_tracking::get_shader_resource_view(descriptor_heap heap, uint32_t offset) const {
-    const descriptor_heap_data& heap_data = heaps.at(heap);
-
-    if (offset < heap_data.descriptors.size()) {
-        const descriptor_data& descriptor = heap_data.descriptors[offset];
-
-        if (descriptor.type == descriptor_type::shader_resource_view)
-            return descriptor.view;
-        else if (descriptor.type == descriptor_type::sampler_with_resource_view)
-            return descriptor.sampler_and_view.view;
-    }
-
-    return { 0 };
-}
-buffer_range descriptor_tracking::get_buffer_range(descriptor_heap heap, uint32_t offset) const {
-    const descriptor_heap_data& heap_data = heaps.at(heap);
-
-    if (offset < heap_data.descriptors.size()) {
-        const descriptor_data& descriptor = heap_data.descriptors[offset];
-
-        if (descriptor.type == descriptor_type::constant_buffer)
-            return descriptor.constant;
-    }
-
-    return { 0 };
-}
-
-void descriptor_tracking::set_all_descriptors(reshade::api::descriptor_heap heap,
-                                              uint32_t offset,
-                                              uint32_t count,
-                                              std::vector<descriptor_tracking::descriptor_data>& descriptor_list,
-                                              uint32_t list_offset) const {
-    const descriptor_heap_data& heap_data = heaps.at(heap);
-
-    size_t mcount = std::min(static_cast<size_t>(offset) + count, heap_data.descriptors.size());
-
-    for (uint32_t i = offset; i < mcount; i++) {
-        descriptor_list[list_offset + i - offset] = heap_data.descriptors[i];
-    }
-}
-
-pipeline_layout_param descriptor_tracking::get_pipeline_layout_param(pipeline_layout layout, uint32_t param) const {
-    const pipeline_layout_data& layout_data = layouts.at(layout);
-
-    return layout_data.params[param];
-}
-
-void descriptor_tracking::register_pipeline_layout(pipeline_layout layout, uint32_t count, const pipeline_layout_param* params) {
-    pipeline_layout_data& layout_data = layouts[layout];
-    layout_data.params.assign(params, params + count);
-    layout_data.ranges.resize(count);
-
-    for (uint32_t i = 0; i < count; ++i) {
-        if (params[i].type == pipeline_layout_param_type::descriptor_table) {
-            layout_data.ranges[i].assign(params[i].descriptor_table.ranges, params[i].descriptor_table.ranges + params[i].descriptor_table.count);
-            layout_data.params[i].descriptor_table.ranges = layout_data.ranges[i].data();
-        }
-    }
-}
-void descriptor_tracking::unregister_pipeline_layout(pipeline_layout layout) {
-    pipeline_layout_data& layout_data = layouts[layout];
-    layout_data.params.clear();
-    layout_data.ranges.clear();
+    return {};
 }
 
 static void on_init_device(device* device) {
@@ -97,11 +66,37 @@ static void on_destroy_device(device* device) {
 
 void descriptor_tracking::on_init_pipeline_layout(device* device, uint32_t count, const pipeline_layout_param* params, pipeline_layout layout) {
     descriptor_tracking& ctx = (*device->get_private_data<descriptor_tracking>());
-    ctx.register_pipeline_layout(layout, count, params);
+    std::vector<table_info> tables(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto& param = params[i];
+        auto& info = tables[i];
+        if (param.type == pipeline_layout_param_type::descriptor_table) {
+            for (uint32_t j = 0; j < param.descriptor_table.count; ++j)
+                info.ranges.push_back({param.descriptor_table.ranges[j]});
+        } else if (param.type == pipeline_layout_param_type::descriptor_table_with_flags) {
+            for (uint32_t j = 0; j < param.descriptor_table_with_flags.count; ++j)
+                info.ranges.push_back({param.descriptor_table_with_flags.ranges[j]});
+        }
+        std::sort(info.ranges.begin(), info.ranges.end(), [](const range_info& a, const range_info& b) { return a.range.binding < b.range.binding; });
+        for (auto& entry : info.ranges) {
+            entry.first = std::max(info.size, entry.range.binding);
+            entry.first_dynamic_offset = info.dynamic_count;
+            if (entry.range.count == UINT32_MAX || entry.range.count > INT32_MAX - std::min<uint32_t>(entry.first, INT32_MAX)) {
+                entry.range.count = 0;
+                continue;
+            }
+            info.size = entry.first + entry.range.count;
+            if (is_dynamic(entry.range.type))
+                info.dynamic_count += entry.range.count;
+        }
+    }
+    std::unique_lock lock(ctx.mutex);
+    ctx.layouts.insert_or_assign(layout.handle, std::move(tables));
 }
 void descriptor_tracking::on_destroy_pipeline_layout(device* device, pipeline_layout layout) {
     descriptor_tracking& ctx = (*device->get_private_data<descriptor_tracking>());
-    ctx.unregister_pipeline_layout(layout);
+    std::unique_lock lock(ctx.mutex);
+    ctx.layouts.erase(layout.handle);
 }
 
 bool descriptor_tracking::on_copy_descriptor_tables(device* device, uint32_t count, const descriptor_table_copy* copies) {
@@ -118,14 +113,21 @@ bool descriptor_tracking::on_copy_descriptor_tables(device* device, uint32_t cou
         descriptor_heap dst_heap;
         device->get_descriptor_heap_offset(copy.dest_table, copy.dest_binding, copy.dest_array_offset, &dst_heap, &dst_offset);
 
-        descriptor_heap_data& src_pool_data = ctx.heaps[src_heap];
-        descriptor_heap_data& dst_pool_data = ctx.heaps[dst_heap];
-
-        if (dst_offset + copy.count > dst_pool_data.descriptors.size())
-            dst_pool_data.descriptors.grow_to_at_least(dst_offset + copy.count);
-
+        if (src_heap == 0 || dst_heap == 0)
+            continue;
+        std::unique_lock lock(ctx.mutex);
+        auto& destination = ctx.heaps[dst_heap.handle];
+        const auto source = ctx.heaps.find(src_heap.handle);
         for (uint32_t k = 0; k < copy.count; ++k) {
-            dst_pool_data.descriptors[dst_offset + k] = src_pool_data.descriptors[src_offset + k];
+            if (source != ctx.heaps.end()) {
+                const auto descriptor = source->second.find(src_offset + k);
+                if (descriptor != source->second.end()) {
+                    auto value = descriptor->second;
+                    destination[dst_offset + k] = value;
+                    continue;
+                }
+            }
+            destination.erase(dst_offset + k);
         }
     }
 
@@ -142,14 +144,13 @@ bool descriptor_tracking::on_update_descriptor_tables(device* device, uint32_t c
         descriptor_heap heap;
         device->get_descriptor_heap_offset(update.table, update.binding, update.array_offset, &heap, &offset);
 
-        descriptor_heap_data& heap_data = ctx.heaps[heap];
-
-        if (offset + update.count > heap_data.descriptors.size())
-            heap_data.descriptors.grow_to_at_least(offset + update.count);
-
+        if (heap == 0)
+            continue;
+        std::unique_lock lock(ctx.mutex);
+        auto& descriptors = ctx.heaps[heap.handle];
         for (uint32_t k = 0; k < update.count; ++k) {
-            descriptor_data& descriptor = heap_data.descriptors[offset + k];
-
+            auto& descriptor = descriptors[offset + k];
+            descriptor = {};
             descriptor.type = update.type;
 
             switch (update.type) {
@@ -166,6 +167,8 @@ bool descriptor_tracking::on_update_descriptor_tables(device* device, uint32_t c
                     descriptor.view = static_cast<const resource_view*>(update.descriptors)[k];
                     break;
                 case descriptor_type::constant_buffer:
+                case descriptor_type::constant_buffer_with_dynamic_offset:
+                case descriptor_type::shader_storage_buffer_with_dynamic_offset:
                 case descriptor_type::shader_storage_buffer:
                     descriptor.constant = static_cast<const buffer_range*>(update.descriptors)[k];
             }

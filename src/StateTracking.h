@@ -38,11 +38,6 @@ constexpr reshade::api::shader_stage ALL_SHADER_STAGES[] = { reshade::api::shade
 
 constexpr uint32_t ALL_SHADER_STAGES_SIZE = sizeof(ALL_SHADER_STAGES) / sizeof(reshade::api::shader_stage);
 
-struct barrier_track {
-    reshade::api::resource_usage usage = reshade::api::resource_usage::undefined;
-    int32_t ref_count = 0;
-};
-
 enum class root_entry_type : int32_t { undefined = -1, push_constants = 1, descriptor_table = 0, push_descriptors = 2, push_descriptors_with_ranges = 3 };
 
 struct root_entry {
@@ -61,7 +56,7 @@ struct root_entry {
 
     root_entry_type type = root_entry_type::undefined;
     int32_t buffer_index = -1;
-    ;
+    std::vector<uint32_t> dynamic_offsets;
     reshade::api::descriptor_table descriptor_table = {};
 };
 
@@ -83,7 +78,7 @@ struct state_block {
     void start_resource_barrier_tracking(reshade::api::resource res, reshade::api::resource_usage current_usage);
     reshade::api::resource_usage stop_resource_barrier_tracking(reshade::api::resource res);
 
-    const descriptor_tracking::descriptor_data* get_descriptor_at(uint32_t stageIndex, uint32_t layout_param, uint32_t binding) const;
+    descriptor_tracking::descriptor_data get_descriptor_at(uint32_t stageIndex, uint32_t layout_param, uint32_t binding) const;
     const size_t get_root_table_entry_size_at(uint32_t stageIndex, uint32_t layout_param) const;
     const size_t get_root_table_size_at(uint32_t stageIndex) const;
     const std::vector<uint32_t>* get_constants_at(uint32_t stageIndex, uint32_t layout_param) const;
@@ -94,6 +89,8 @@ struct state_block {
     void clear();
     void clear_present(reshade::api::effect_runtime* runtime);
 
+    reshade::api::device* owner_device = nullptr;
+    bool inspect_tables = false;
     std::vector<reshade::api::resource_view> render_targets;
     reshade::api::resource_view depth_stencil = { 0 };
     std::array<reshade::api::pipeline, ALL_PIPELINE_STAGES_SIZE> current_pipeline;
@@ -111,9 +108,10 @@ struct state_block {
     std::array<std::vector<std::vector<uint32_t>>, ALL_SHADER_STAGES_SIZE> constant_buffer;
     std::array<std::vector<std::vector<descriptor_tracking::descriptor_data>>, ALL_SHADER_STAGES_SIZE> descriptor_buffer;
 
-    std::unordered_map<uint64_t, barrier_track> resource_barrier_track;
+    reshade::api::resource trackedResource = {};
+    reshade::api::resource_usage trackedUsage = reshade::api::resource_usage::undefined;
 
-    IDirect3DStateBlock9* dx_state;
+    IDirect3DStateBlock9* dx_state = nullptr;
 };
 
 struct __declspec(uuid("EE0C0141-E361-42E5-AF64-25F2F677F37F")) DeviceStateTracking {
@@ -137,6 +135,4 @@ class __declspec(uuid("c9abddf0-f9c2-4a7b-af49-89d8d470e207")) state_tracking : 
     /// </summary>
     static void unregister_events();
 
-  private:
-    static bool track_descriptors;
 };

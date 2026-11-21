@@ -93,7 +93,7 @@ class __declspec(novtable) RenderingManager final {
   private:
     static void CycleDescriptors(ShaderToggler::ToggleGroup* group,
                                  state_tracking& state,
-                                 const descriptor_tracking::descriptor_data* buf,
+                                 descriptor_tracking::descriptor_data& buf,
                                  uint32_t stageIndex,
                                  int32_t slot,
                                  int32_t& desc,

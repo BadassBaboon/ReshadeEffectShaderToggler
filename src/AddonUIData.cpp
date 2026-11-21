@@ -158,14 +158,6 @@ void AddonUIData::SignalToggleGroupRemoved(reshade::api::effect_runtime* runtime
     }
 }
 
-void AddonUIData::AssignPreferredGroupTechniques(std::unordered_map<std::string, EffectData>& allTechniques)
-{
-    for (auto& it : _toggleGroups)
-    {
-        it.second.AssignPreferredTechniqueData(allTechniques);
-    }
-}
-
 vector<ToggleGroup*> AddonUIData::GetToggleGroupsForPixelShaderHash(uint32_t hash)
 {
     shared_lock<shared_mutex> lock(_shaderHashToToggleGroupsMutex);
@@ -346,19 +338,26 @@ void AddonUIData::MoveGroupDown(int id)
 /// <summary>
 /// Loads the defined hashes and groups from the shaderToggler.ini file.
 /// </summary>
-void AddonUIData::LoadShaderTogglerIniFile(const string& fileName)
+void AddonUIData::LoadShaderTogglerIniFile(reshade::api::effect_runtime* runtime, const string& fileName)
 {
-    // Will assume it's started at the start of the application and therefore no groups are present.
-
     reshade::log::message(reshade::log::level::info, std::format("Loading config file from \"{}\"", (_basePath / fileName).string()).c_str());
 
     CDataFile iniFile;
     if (!iniFile.Load((_basePath / fileName).string()))
     {
-        reshade::log::message(reshade::log::level::info, std::format("Could not find config file at \"{}\"", (_basePath / fileName).string()).c_str());
-        MarkConfigClean();
-        // not there
+        reshade::log::message(reshade::log::level::info, std::format("Could not read config file at \"{}\"", (_basePath / fileName).string()).c_str());
         return;
+    }
+
+    if (runtime != nullptr) {
+        _toggleGroupIdEffectEditing = -1;
+        _toggleGroupIdSettingsOpen = -1;
+        _toggleGroupIdShaderEditing = -1;
+        _toggleGroupIdConstantEditing = -1;
+        StopHuntingMode();
+        for (auto& [_, group] : _toggleGroups)
+            SignalToggleGroupRemoved(runtime, &group);
+        RetireAllToggleGroups();
     }
 
     const int configVersion = iniFile.GetInt("ConfigVersion", "General");
@@ -453,22 +452,8 @@ void AddonUIData::LoadShaderTogglerIniFile(const string& fileName)
         group.SetConfigDirtyFlag(&_configDirty);
         groupCounter++;
 
-        for (const auto& h : group.getPixelShaderHashes())
-        {
-            _pixelShaderHashToToggleGroups[h].push_back(&group);
-        }
-
-        for (const auto& h : group.getVertexShaderHashes())
-        {
-            _vertexShaderHashToToggleGroups[h].push_back(&group);
-        }
-
-        for (const auto& h : group.getComputeShaderHashes())
-        {
-            _computeShaderHashToToggleGroups[h].push_back(&group);
-        }
     }
-
+    UpdateToggleGroupsForShaderHashes();
     MarkConfigClean();
 }
 

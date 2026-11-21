@@ -32,7 +32,7 @@ using effect_queue = std::unordered_map<EffectData*, ResourceRenderData>;
 using binding_queue = std::unordered_map<ShaderToggler::ToggleGroup*, ResourceRenderData>;
 
 struct __declspec(novtable) ShaderData final {
-    uint32_t activeShaderHash = -1;
+    uint32_t activeShaderHash = 0;
     binding_queue bindingsToUpdate;
     std::unordered_set<ShaderToggler::ToggleGroup*> constantBuffersToUpdate;
     effect_queue techniquesToRender;
@@ -44,7 +44,7 @@ struct __declspec(novtable) ShaderData final {
       : id(_id) {}
 
     void Reset() {
-        activeShaderHash = -1;
+        activeShaderHash = 0;
         bindingsToUpdate.clear();
         constantBuffersToUpdate.clear();
         techniquesToRender.clear();
@@ -67,6 +67,16 @@ struct __declspec(uuid("222F7169-3C09-40DB-9BC9-EC53842CE537")) CommandListDataC
     bool isIndexedDraw = false;
     uint32_t currentDrawCount = 0;
     uint32_t currentInstanceCount = 1;
+
+    uint64_t effectGeneration = 0;
+    void SyncEffectGeneration(uint64_t generation) {
+        if (effectGeneration == generation)
+            return;
+        ps.techniquesToRender.clear();
+        vs.techniquesToRender.clear();
+        cs.techniquesToRender.clear();
+        effectGeneration = generation;
+    }
 
     void Reset() {
         ps.Reset();
@@ -147,7 +157,7 @@ struct __declspec(novtable) SpecialEffect final {
     reshade::api::effect_technique technique;
 };
 
-enum SpecialEffects : uint32_t { REST_TONEMAP_TO_SDR = 0, REST_TONEMAP_TO_HDR, REST_FLIP, REST_NOOP, REST_EFFECTS_COUNT };
+enum SpecialEffects : uint32_t { REST_TONEMAP_TO_SDR = 0, REST_TONEMAP_TO_HDR, REST_FLIP, REST_NOOP, REST_SAVE_ALPHA, REST_RESTORE_ALPHA, REST_EFFECTS_COUNT };
 
 struct __declspec(novtable) CustomShaderInstance final {
     reshade::api::pipeline pipeline = { 0 };
@@ -167,6 +177,8 @@ struct __declspec(novtable) CustomShader final {
 };
 
 struct __declspec(novtable) ResouceManagerData final {
+    std::unordered_map<uint64_t, std::shared_ptr<Rendering::GlobalResourceView>> views;
+    std::shared_mutex viewMutex;
     reshade::api::resource preview_res[2] = { { 0 }, { 0 } };
     reshade::api::resource_view preview_rtv[2] = { { 0 }, { 0 } };
     reshade::api::resource_view preview_srv[2] = { { 0 }, { 0 } };
@@ -189,6 +201,12 @@ struct __declspec(uuid("C63E95B1-4E2F-46D6-A276-E8B4612C069A")) DeviceDataContai
     std::unordered_set<const ShaderToggler::ToggleGroup*> bindingsUpdated;
     std::unordered_set<const ShaderToggler::ToggleGroup*> constantsUpdated;
     std::unordered_set<const ShaderToggler::ToggleGroup*> srvUpdated;
+    uint64_t effectGeneration = 0; // Protected by render_mutex.
+    void InvalidateEffectQueues() {
+        ++effectGeneration;
+        vulkanAutoPendingEffects.clear();
+        vulkanAutoWorkPending.store(false, std::memory_order_release);
+    }
     effect_queue vulkanAutoPendingEffects;
     std::atomic_bool vulkanAutoWorkPending{ false };
     std::atomic_bool vulkanPreviewWorkPending{ false };
@@ -210,6 +228,7 @@ struct __declspec(uuid("838BAF1D-95C0-4A7E-A517-052642879986")) RuntimeDataConta
         SpecialEffect{ "REST_TONEMAP_TO_HDR", reshade::api::effect_technique{ 0 } },
         SpecialEffect{ "REST_FLIP", reshade::api::effect_technique{ 0 } },
         SpecialEffect{ "REST_NOOP", reshade::api::effect_technique{ 0 } },
+        SpecialEffect{ "REST_SAVE_ALPHA", {} },
+        SpecialEffect{ "REST_RESTORE_ALPHA", {} },
     };
-    int32_t previousEnableCount = 0;
 };

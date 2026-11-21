@@ -15,7 +15,7 @@ void ConstantCopyMemcpyNested::OnMapBufferRegion(device* device, resource resour
         resource_desc desc = device->get_resource_desc(resource);
         if (desc.heap == memory_heap::upload && static_cast<uint32_t>(desc.usage & resource_usage::constant_buffer)) {
             unique_lock<shared_mutex> lock(_map_mutex);
-            _resourceMemoryMapping[resource.handle] = BufferCopy{ resource.handle, *data, nullptr, offset, size, desc.buffer.size };
+            _resourceMemoryMapping[resource.handle] = BufferCopy{ resource.handle, *data, offset, size, desc.buffer.size };
         }
     }
 }
@@ -31,14 +31,11 @@ void ConstantCopyMemcpyNested::OnUnmapBufferRegion(device* device, resource reso
 
 void ConstantCopyMemcpyNested::OnMemcpy(void* volatile dest, void* src, size_t size) {
     shared_lock<shared_mutex> lock(_map_mutex);
-    if (_resourceMemoryMapping.size() > 0) {
-        for (auto& [_, buffer] : _resourceMemoryMapping) {
-            if (dest >= buffer.destination && static_cast<uintptr_t>(reinterpret_cast<intptr_t>(dest)) <=
-                                                reinterpret_cast<intptr_t>(buffer.destination) + buffer.bufferSize - buffer.offset) {
-                SetHostConstantBuffer(
-                  buffer.resource, src, size, reinterpret_cast<intptr_t>(dest) - reinterpret_cast<intptr_t>(buffer.destination), buffer.bufferSize);
-                break;
-            }
+    for (const auto& [_, buffer] : _resourceMemoryMapping) {
+        uint64_t offset;
+        if (buffer.contains(dest, size, offset)) {
+            SetHostConstantBuffer(buffer.resource, src, size, offset, buffer.bufferSize);
+            break;
         }
     }
 }

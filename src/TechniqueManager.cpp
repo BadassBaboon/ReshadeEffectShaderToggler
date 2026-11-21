@@ -37,6 +37,9 @@ void TechniqueManager::OnReshadeReloadedEffects(reshade::api::effect_runtime* ru
     data.allEnabledTechniques.clear();
     data.allTechniques.clear();
     data.allSortedTechniques.clear();
+    data.techniqueUiCache.clear();
+    for (auto& builtin : data.specialEffects)
+        builtin.technique = {};
 
     Rendering::RenderingManager::EnumerateTechniques(
       runtime, [&data, this](effect_runtime* runtime, effect_technique technique, string& name, string& eff_name) {
@@ -57,6 +60,7 @@ void TechniqueManager::OnReshadeReloadedEffects(reshade::api::effect_runtime* ru
           }
 
           const auto& it = data.allTechniques.emplace(name + " [" + eff_name + "]", EffectData{ technique, runtime, enabled });
+          it.first->second.name = &it.first->first;
           data.allSortedTechniques.push_back(&it.first->second);
 
           if (enabled) {
@@ -74,15 +78,11 @@ void TechniqueManager::OnReshadeReloadedEffects(reshade::api::effect_runtime* ru
     std::sort(data.techniqueUiCache.begin(), data.techniqueUiCache.end(),
               [](const auto& lhs, const auto& rhs) { return lhs.name < rhs.name; });
 
-    int32_t enabledCount = static_cast<int32_t>(data.allTechniques.size());
-
-    if (enabledCount == 0 || enabledCount < data.previousEnableCount) {
+    if (data.allTechniques.empty() && std::none_of(std::begin(data.specialEffects), std::end(data.specialEffects),
+        [](const auto& builtin) { return builtin.technique != 0; }))
         SignalEffectsReloading(runtime);
-    } else {
+    else
         SignalEffectsReloaded(runtime);
-    }
-
-    data.previousEnableCount = enabledCount;
 }
 
 bool TechniqueManager::OnReshadeSetTechniqueState(reshade::api::effect_runtime* runtime, reshade::api::effect_technique technique, bool enabled) {
@@ -112,6 +112,8 @@ bool TechniqueManager::OnReshadeSetTechniqueState(reshade::api::effect_runtime* 
         return false;
     }
 
+    if (enabled && !it->second.enabled)
+        it->second.timeout_start = std::chrono::steady_clock::now();
     it->second.enabled = enabled;
 
     if (!enabled) {
@@ -131,57 +133,15 @@ bool TechniqueManager::OnReshadeReorderTechniques(reshade::api::effect_runtime* 
     RuntimeDataContainer& data = (*runtime->get_private_data<RuntimeDataContainer>());
     unique_lock<shared_mutex> lock(data.technique_mutex);
 
-    data.allEnabledTechniques.clear();
-    data.allTechniques.clear();
+    std::unordered_map<uint64_t, EffectData*> byHandle;
+    for (auto& [name, effect] : data.allTechniques)
+        byHandle.emplace(effect.technique.handle, &effect);
     data.allSortedTechniques.clear();
-    data.techniqueUiCache.clear();
-
-    for (uint32_t i = 0; i < count; i++) {
-        effect_technique technique = techniques[i];
-
-        charBufferSize = CHAR_BUFFER_SIZE;
-        runtime->get_technique_name(technique, charBuffer, &charBufferSize);
-        string name(charBuffer);
-
-        charBufferSize = CHAR_BUFFER_SIZE;
-        runtime->get_technique_effect_name(technique, charBuffer, &charBufferSize);
-        string eff_name(charBuffer);
-
-        std::string effKey = name + " [" + eff_name + "]";
-
-        bool enabled = runtime->get_technique_state(technique);
-
-        // Assign technique handles to REST effects
-        bool builtin = false;
-        for (uint32_t j = 0; j < REST_EFFECTS_COUNT; j++) {
-            if (name == data.specialEffects[j].name) {
-                data.specialEffects[j].technique = technique;
-                builtin = true;
-                break;
-            }
-        }
-
-        if (builtin) {
-            continue;
-        }
-
-        const auto& it = data.allTechniques.emplace(effKey, EffectData{ technique, runtime, enabled });
-        data.allSortedTechniques.push_back(&it.first->second);
-
-        if (enabled) {
-            data.allEnabledTechniques.emplace(&it.first->second);
-        }
+    for (size_t i = 0; i < count; ++i) {
+        const auto it = byHandle.find(techniques[i].handle);
+        if (it != byHandle.end())
+            data.allSortedTechniques.push_back(it->second);
     }
-
-    data.techniqueUiCache.reserve(data.allTechniques.size());
-    for (auto& [name, effect] : data.allTechniques) {
-        std::string upper = name;
-        std::transform(upper.begin(), upper.end(), upper.begin(),
-                       [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
-        data.techniqueUiCache.push_back({ name, std::move(upper), &effect });
-    }
-    std::sort(data.techniqueUiCache.begin(), data.techniqueUiCache.end(),
-              [](const auto& lhs, const auto& rhs) { return lhs.name < rhs.name; });
 
     return false;
 }
@@ -194,14 +154,11 @@ void TechniqueManager::OnReshadePresent(reshade::api::effect_runtime* runtime) {
     // Enhanced port cleared it for every known technique, which re-armed disabled ones as
     // well and dropped RDR1 (D3D12) from 144 to ~16 fps whenever a group rendered anything.
 
-    for (auto el = deviceData.allEnabledTechniques.begin(); el != deviceData.allEnabledTechniques.end();) {
-        EffectData const* eff = *el;
-
-        // Get rid of techniques with a timeout. We don't actually have a timer, so just get rid of them after they were rendered at least once
+    std::vector<effect_technique> expired;
+    for (auto* eff : deviceData.allEnabledTechniques) {
         if (eff->timeout >= 0 && eff->technique != 0 &&
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - eff->timeout_start).count() >= eff->timeout) {
-            runtime->set_technique_state(eff->technique, false);
-            el = deviceData.allEnabledTechniques.erase(el);
+            expired.push_back(eff->technique);
             continue;
         }
 
@@ -211,7 +168,9 @@ void TechniqueManager::OnReshadePresent(reshade::api::effect_runtime* runtime) {
         } else {
             eff->rendered = false;
         }
-
-        el++;
     }
+    // ReShade calls our technique-state callback synchronously.
+    lock.unlock();
+    for (auto technique : expired)
+        runtime->set_technique_state(technique, false);
 }

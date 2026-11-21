@@ -74,17 +74,15 @@ class __declspec(novtable) ConstantHandlerBase final {
     ConstantHandlerBase();
     ~ConstantHandlerBase();
 
-    void SetBufferRange(ShaderToggler::ToggleGroup* group, reshade::api::buffer_range range, reshade::api::device* dev, reshade::api::command_list* cmd_list);
+    bool SetBufferRange(ShaderToggler::ToggleGroup* group, reshade::api::buffer_range range, reshade::api::device* dev, reshade::api::command_list* cmd_list);
     void SetConstants(const ShaderToggler::ToggleGroup* group,
-                      const std::vector<uint32_t>& buf,
-                      reshade::api::device* dev,
-                      reshade::api::command_list* cmd_list);
+                      const std::vector<uint32_t>& buf);
     std::shared_mutex& GetBufferMutex() { return groupBufferMutex; }
     void RemoveGroup(const ShaderToggler::ToggleGroup*, reshade::api::device* dev);
     const uint8_t* GetConstantBuffer(const ShaderToggler::ToggleGroup* group);
     size_t GetConstantBufferSize(const ShaderToggler::ToggleGroup* group);
     void ReloadConstantVariables(reshade::api::effect_runtime* runtime);
-    void UpdateConstants(reshade::api::command_list* cmd_list);
+    void UpdateConstants(reshade::api::command_list* cmd_list, uint64_t stages);
     void ClearConstantVariables();
     void ApplyConstantValues(reshade::api::effect_runtime* runtime,
                              const ShaderToggler::ToggleGroup*,

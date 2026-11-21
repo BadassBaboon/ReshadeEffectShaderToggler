@@ -449,7 +449,6 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
     bool exceptions = group->getHasTechniqueExceptions();
     const bool oldAllowAll = allowAll;
     const bool oldExceptions = exceptions;
-    bool selectionChanged = false;
 
     size_t availableCount = 0;
     {
@@ -467,9 +466,7 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted("Apply all enabled techniques");
             ImGui::TableNextColumn();
-            if (DrawTableToggleSwitch("##ApplyAllTechniques", &allowAll)) {
-                selectionChanged = true;
-            }
+            DrawTableToggleSwitch("##ApplyAllTechniques", &allowAll);
 
             if (allowAll) {
                 ImGui::TableNextRow();
@@ -477,9 +474,7 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextUnformatted("Except for selected techniques");
                 ImGui::TableNextColumn();
-                if (DrawTableToggleSwitch("##TechExceptions", &exceptions)) {
-                    selectionChanged = true;
-                }
+                DrawTableToggleSwitch("##TechExceptions", &exceptions);
             }
 
             ImGui::TableNextRow();
@@ -548,7 +543,6 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
                 }
             }
             group->setPreferredTechniques(updated);
-            selectionChanged = true;
         }
         ImGui::SameLine();
         if (ImGui::Button("Untick All", ImVec2(untickAllW, 0))) {
@@ -568,7 +562,6 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
                 }
                 group->setPreferredTechniques(updated);
             }
-            selectionChanged = true;
         }
 
         char techCountBuf[64];
@@ -618,7 +611,6 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
                             else
                                 updated.erase(entry.name);
                             group->setPreferredTechniques(updated);
-                            selectionChanged = true;
                         }
 
                         if (entry.effect != nullptr && !entry.effect->enabled) {
@@ -648,12 +640,6 @@ static void DisplayTechniqueSelection(reshade::api::effect_runtime* runtime,
     if (allowAll != oldAllowAll || exceptions != oldExceptions) {
         group->setHasTechniqueExceptions(exceptions);
         group->setAllowAllTechniques(allowAll);
-        selectionChanged = true;
-    }
-
-    if (selectionChanged) {
-        std::shared_lock<std::shared_mutex> techLock(runtimeData.technique_mutex);
-        instance.AssignPreferredGroupTechniques(runtimeData.allTechniques);
     }
 }
 
@@ -690,6 +676,7 @@ static void DisplayPreview(AddonImGui::AddonUIData& instance,
                            float width = 0) {
     DeviceDataContainer& deviceData = (*runtime->get_device()->get_private_data<DeviceDataContainer>());
     reshade::api::resource_view srv = reshade::api::resource_view{ 0 };
+    std::shared_lock previewLock(deviceData.binding_mutex);
     resManager.SetPongPreviewHandles(runtime->get_device(), nullptr, nullptr, &srv);
     bool clearAlpha = group->getClearPreviewAlpha();
     const bool vulkan = runtime->get_device()->get_api() == reshade::api::device_api::vulkan;
@@ -2305,9 +2292,6 @@ static void DrawCategoryGroups(AddonImGui::AddonUIData& instance, reshade::api::
     if (ImGui::Button("Import Group")) {
         const char* clipboard = ImGui::GetClipboardText();
         if (clipboard != nullptr && instance.ImportToggleGroup(clipboard) != nullptr) {
-            RuntimeDataContainer& runtimeData = (*runtime->get_private_data<RuntimeDataContainer>());
-            std::shared_lock<std::shared_mutex> techLock(runtimeData.technique_mutex);
-            instance.AssignPreferredGroupTechniques(runtimeData.allTechniques);
             groupClipboardStatus = "Group imported from clipboard.";
         } else {
             groupClipboardStatus = "Clipboard does not contain a valid REST group.";
@@ -2931,17 +2915,7 @@ static void DrawCategoryOptions(AddonImGui::AddonUIData& instance, reshade::api:
 
         ImGui::SameLine();
         if (ImGui::Button("Reload from ini##OptReload")) {
-            instance.GetToggleGroupIdEffectEditing() = -1;
-            instance.GetToggleGroupIdSettingsOpen() = -1;
-            instance.GetToggleGroupIdShaderEditing() = -1;
-            instance.GetToggleGroupIdConstantEditing() = -1;
-            instance.StopHuntingMode();
-            for (auto& [_, group] : instance.GetToggleGroups()) {
-                instance.SignalToggleGroupRemoved(runtime, &group);
-            }
-            instance.RetireAllToggleGroups();
-            instance.LoadShaderTogglerIniFile();
-            instance.UpdateToggleGroupsForShaderHashes();
+            instance.LoadShaderTogglerIniFile(runtime);
         }
         EndCard();
     }
@@ -3012,17 +2986,7 @@ static void DisplayRestTab(AddonImGui::AddonUIData& instance, reshade::api::effe
         ImGui::Spacing();
 
         if (ImGui::Button("Reload INI", ImVec2(-1, 0))) {
-            instance.GetToggleGroupIdEffectEditing() = -1;
-            instance.GetToggleGroupIdSettingsOpen() = -1;
-            instance.GetToggleGroupIdShaderEditing() = -1;
-            instance.GetToggleGroupIdConstantEditing() = -1;
-            instance.StopHuntingMode();
-            for (auto& [_, group] : instance.GetToggleGroups()) {
-                instance.SignalToggleGroupRemoved(runtime, &group);
-            }
-            instance.RetireAllToggleGroups();
-            instance.LoadShaderTogglerIniFile();
-            instance.UpdateToggleGroupsForShaderHashes();
+            instance.LoadShaderTogglerIniFile(runtime);
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Discard unsaved changes and reload from ReshadeEffectShaderToggler.ini");
 

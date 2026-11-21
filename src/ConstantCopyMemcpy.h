@@ -51,10 +51,22 @@ namespace Constants {
 struct BufferCopy {
     uint64_t resource = 0;
     void* destination = nullptr;
-    uint8_t* hostDestination = nullptr;
     uint64_t offset = 0;
     uint64_t size = 0;
     uint64_t bufferSize = 0;
+
+    bool contains(const void* address, size_t length, uint64_t& resourceOffset) const {
+        const uintptr_t base = reinterpret_cast<uintptr_t>(destination);
+        const uintptr_t ptr = reinterpret_cast<uintptr_t>(address);
+        if (!resource || !base || ptr < base || offset >= bufferSize)
+            return false;
+        const uint64_t mapped = std::min(size, bufferSize - offset);
+        const uint64_t delta = ptr - base;
+        if (delta >= mapped || length > mapped - delta)
+            return false;
+        resourceOffset = offset + delta;
+        return true;
+    }
 };
 
 class ConstantCopyMemcpy : public virtual ConstantCopyBase {

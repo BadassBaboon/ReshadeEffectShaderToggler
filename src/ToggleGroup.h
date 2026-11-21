@@ -37,6 +37,7 @@
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -159,11 +160,17 @@ class ToggleGroup {
     /// </summary>
     bool isRetired() const { return _isRetired; }
     void setRetired(bool isRetired = true) { _isRetired = isRetired; }
-    bool isEmpty() const { return _vertexShaderHashes.size() <= 0 && _pixelShaderHashes.size() <= 0; }
+    bool isEmpty() const { return _vertexShaderHashes.empty() && _pixelShaderHashes.empty() && _computeShaderHashes.empty(); }
     int getId() const { return _id; }
     void setId(int id) { _id = id; }
     const std::unordered_set<std::string>& preferredTechniques() const { return _preferredTechniques; }
-    void setPreferredTechniques(const std::unordered_set<std::string>& techniques) { if (_preferredTechniques != techniques) { _preferredTechniques = techniques; markConfigDirty(); } }
+    void setPreferredTechniques(const std::unordered_set<std::string>& techniques) {
+        std::unique_lock lock(_techniqueSelectionMutex);
+        if (_preferredTechniques != techniques) {
+            _preferredTechniques = techniques;
+            markConfigDirty();
+        }
+    }
     const std::unordered_set<uint32_t>& getPixelShaderHashes() const { return _pixelShaderHashes; }
     const std::unordered_set<uint32_t>& getVertexShaderHashes() const { return _vertexShaderHashes; }
     const std::unordered_set<uint32_t>& getComputeShaderHashes() const { return _computeShaderHashes; }
@@ -414,8 +421,13 @@ class ToggleGroup {
     bool AlphaClear() { return false; }
     bool BindingEnabled() { return _isProvidingTextureBinding && _copyTextureBinding; }
     bool BindingClear() { return _clearBindings; }
-    void AssignPreferredTechniqueData(std::unordered_map<std::string, EffectData>& allTechniques);
-    const std::unordered_set<EffectData*>& GetPreferredTechniqueData();
+    bool acceptsTechnique(const std::string& name) const {
+        const bool allowAll = _allowAllTechniques;
+        if (allowAll && !_hasTechniqueExceptions)
+            return true;
+        std::shared_lock lock(_techniqueSelectionMutex);
+        return _preferredTechniques.contains(name) != allowAll;
+    }
 
   private:
     void markConfigDirty() const {
@@ -484,10 +496,10 @@ class ToggleGroup {
     uint32_t _renderSrvDescIndex = 0;
     uint32_t _bindingSrvShaderStage = 0;
     uint32_t _renderSrvShaderStage = 0;
-    bool _isActive;           // true means the group is actively toggled (so the hashes have to be hidden.
+    std::atomic_bool _isActive;           // true means the group is actively toggled (so the hashes have to be hidden.
     bool _isEditing;          // true means the group is actively edited (name, key)
-    bool _isRetired = false;  // true means the group was removed and only lives on so stale render-thread pointers stay valid
-    bool _allowAllTechniques; // true means all techniques are allowed, regardless of preferred techniques.
+    std::atomic_bool _isRetired = false;  // true means the group was removed and only lives on so stale render-thread pointers stay valid
+    std::atomic_bool _allowAllTechniques; // true means all techniques are allowed, regardless of preferred techniques.
     volatile bool _isProvidingTextureBinding;
     volatile bool _copyTextureBinding;
     bool _renderToResourceViews;
@@ -517,7 +529,7 @@ class ToggleGroup {
     bool _extractResourceViews;
     volatile bool _clearBindings;
     bool _previewClearAlpha = true;
-    bool _hasTechniqueExceptions; // _preferredTechniques are handled as exception to _allowAllTechniques
+    std::atomic_bool _hasTechniqueExceptions; // _preferredTechniques are handled as exception to _allowAllTechniques
     bool _tonemapHDRtoSDRtoHDR = false;
     volatile bool _preserveAlpha = false;
     bool _flipBuffer = false;
@@ -539,7 +551,7 @@ class ToggleGroup {
     bool _cbModePush = false;
     std::string _textureBindingName;
     std::unordered_set<std::string> _preferredTechniques;
-    std::unordered_set<EffectData*> _preferredTechniqueData;
+    mutable std::shared_mutex _techniqueSelectionMutex;
     std::unordered_map<std::string, std::tuple<uintptr_t, bool>> _varOffsetMapping;
     DescriptorCycle _cbCycle;
     DescriptorCycle _srvCycle;

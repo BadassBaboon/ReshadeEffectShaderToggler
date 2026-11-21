@@ -1,6 +1,7 @@
 #pragma once
 #include "reshade.hpp"
 #include <chrono>
+#include <string>
 
 struct __declspec(novtable) EffectData final {
     constexpr EffectData()
@@ -31,6 +32,7 @@ struct __declspec(novtable) EffectData final {
         enabled = active;
     }
 
+    const std::string* name = nullptr; // Key of the owning runtime's allTechniques entry.
     mutable bool rendered = false;
     bool enabled_in_screenshot = true;
     bool enabled = false;

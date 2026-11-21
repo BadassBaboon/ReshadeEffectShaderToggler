@@ -84,49 +84,12 @@ void RenderingQueueManager::_CheckCallForCommandList(ShaderData& sData,
                     }
                 }
 
-                if (group->getAllowAllTechniques()) {
-                    auto& preferred = group->GetPreferredTechniqueData();
-
-                    for (const auto& techData : runtimeData.allEnabledTechniques) {
-                        if (group->getHasTechniqueExceptions() && preferred.contains(techData)) {
-                            continue;
-                        }
-
-                        if (!techData->rendered) {
-                            if (!sData.techniquesToRender.contains(techData)) {
-                                if (group->getRenderToResourceViews() || autoSceneColour) {
-                                    sData.techniquesToRender.emplace(techData, ResourceRenderData{ group, CALL_DRAW, resource{ 0 }, format::unknown });
-                                    queue_mask |= (match_effect << CALL_DRAW * MATCH_DELIMITER);
-                                } else {
-                                    sData.techniquesToRender.emplace(
-                                      techData, ResourceRenderData{ group, group->getInvocationLocation(), resource{ 0 }, format::unknown });
-                                    queue_mask |=
-                                      (match_effect << (group->getInvocationLocation() * MATCH_DELIMITER)) | (match_effect << (CALL_DRAW * MATCH_DELIMITER));
-                                }
-                            }
-                        }
-                    }
-                } else if (group->preferredTechniques().size() > 0) {
-                    auto& preferred = group->GetPreferredTechniqueData();
-
-                    for (auto& eff : preferred) {
-                        // Selected techniques still obey ReShade's global enabled state.
-                        if (!eff->enabled) {
-                            continue;
-                        }
-
-                        if (!eff->rendered && !sData.techniquesToRender.contains(eff)) {
-                            if (group->getRenderToResourceViews() || autoSceneColour) {
-                                sData.techniquesToRender.emplace(eff, ResourceRenderData{ group, CALL_DRAW, resource{ 0 }, format::unknown });
-                                queue_mask |= (match_effect << CALL_DRAW * MATCH_DELIMITER);
-                            } else {
-                                sData.techniquesToRender.emplace(eff,
-                                                                 ResourceRenderData{ group, group->getInvocationLocation(), resource{ 0 }, format::unknown });
-                                queue_mask |=
-                                  (match_effect << (group->getInvocationLocation() * MATCH_DELIMITER)) | (match_effect << (CALL_DRAW * MATCH_DELIMITER));
-                            }
-                        }
-                    }
+                const uint64_t location = group->getRenderToResourceViews() || autoSceneColour ? CALL_DRAW : group->getInvocationLocation();
+                for (auto* effect : runtimeData.allEnabledTechniques) {
+                    if (effect->rendered || !group->acceptsTechnique(*effect->name))
+                        continue;
+                    if (sData.techniquesToRender.try_emplace(effect, ResourceRenderData{ group, location, resource{ 0 }, format::unknown }).second)
+                        queue_mask |= match_effect | (match_effect << (location * MATCH_DELIMITER));
                 }
             }
         }
@@ -143,18 +106,17 @@ void RenderingQueueManager::CheckCallForCommandList(reshade::api::command_list* 
     CommandListDataContainer& commandListData = (*commandList->get_private_data<CommandListDataContainer>());
     DeviceDataContainer& deviceData = (*commandList->get_device()->get_private_data<DeviceDataContainer>());
 
-    if (deviceData.current_runtime == nullptr) {
-        return;
-    }
-
-    RuntimeDataContainer& runtimeData = (*deviceData.current_runtime->get_private_data<RuntimeDataContainer>());
-
-    shared_lock<shared_mutex> t_mutex(runtimeData.technique_mutex);
     // Exclusive, as before the port: _CheckCallForCommandList writes shared device state
     // (huntPreview) and reads technique 'rendered' flags that RenderEffects writes under
     // render_mutex, from multiple recording threads on D3D12/Vulkan.
     unique_lock<shared_mutex> b_mutex(deviceData.binding_mutex);
     unique_lock<shared_mutex> r_mutex(deviceData.render_mutex);
+
+    if (deviceData.current_runtime == nullptr)
+        return;
+    auto& runtimeData = *deviceData.current_runtime->get_private_data<RuntimeDataContainer>();
+    shared_lock<shared_mutex> t_mutex(runtimeData.technique_mutex);
+    commandListData.SyncEffectGeneration(deviceData.effectGeneration);
 
     _CheckCallForCommandList(commandListData.ps, commandListData, deviceData, runtimeData);
     _CheckCallForCommandList(commandListData.vs, commandListData, deviceData, runtimeData);
@@ -162,19 +124,18 @@ void RenderingQueueManager::CheckCallForCommandList(reshade::api::command_list* 
 }
 
 void RenderingQueueManager::_RescheduleGroups(ShaderData& sData, CommandListDataContainer& commandListData, DeviceDataContainer& deviceData) {
-    const uint32_t match_effect = MATCH_EFFECT_PS << sData.id;
-    const uint32_t match_binding = MATCH_BINDING_PS << sData.id;
-    const uint32_t match_const = MATCH_CONST_PS << sData.id;
-    const uint32_t match_preview = MATCH_PREVIEW_PS << sData.id;
+    const uint64_t match_effect = MATCH_EFFECT_PS << sData.id;
+    const uint64_t match_binding = MATCH_BINDING_PS << sData.id;
+    const uint64_t match_preview = MATCH_PREVIEW_PS << sData.id;
 
-    uint32_t queue_mask = MATCH_NONE;
+    uint64_t queue_mask = MATCH_NONE;
 
     for (const auto& tech : sData.techniquesToRender) {
         const ToggleGroup* group = tech.second.group;
         const resource res = tech.second.resource;
 
         if (res == 0 && group->getRequeueAfterRTMatchingFailure()) {
-            queue_mask |= (match_effect << (group->getInvocationLocation() * MATCH_DELIMITER)) | (match_effect << (CALL_DRAW * MATCH_DELIMITER));
+            queue_mask |= (match_effect << (tech.second.invocationLocation * MATCH_DELIMITER)) | (match_effect << (CALL_DRAW * MATCH_DELIMITER));
 
             if (group->getId() == uiData.GetToggleGroupIdShaderEditing() && !deviceData.huntPreview.matched && deviceData.huntPreview.target == 0) {
                 if (uiData.GetCurrentTabType() == AddonImGui::TAB_RENDER_TARGET &&
@@ -191,7 +152,7 @@ void RenderingQueueManager::_RescheduleGroups(ShaderData& sData, CommandListData
         const ToggleGroup* group = tech.first;
 
         if (tech.second.resource == 0 && group->getRequeueAfterRTMatchingFailure()) {
-            queue_mask |= (match_binding << (group->getInvocationLocation() * MATCH_DELIMITER)) | (match_binding << (CALL_DRAW * MATCH_DELIMITER));
+            queue_mask |= (match_binding << (tech.second.invocationLocation * MATCH_DELIMITER)) | (match_binding << (CALL_DRAW * MATCH_DELIMITER));
 
             if (group->getId() == uiData.GetToggleGroupIdShaderEditing() && !deviceData.huntPreview.matched && deviceData.huntPreview.target == 0) {
                 if (uiData.GetCurrentTabType() == AddonImGui::TAB_RENDER_TARGET &&
@@ -208,6 +169,11 @@ void RenderingQueueManager::_RescheduleGroups(ShaderData& sData, CommandListData
 }
 
 void RenderingQueueManager::RescheduleGroups(CommandListDataContainer& commandListData, DeviceDataContainer& deviceData) {
+    if (commandListData.ps.techniquesToRender.empty() && commandListData.ps.bindingsToUpdate.empty() &&
+        commandListData.vs.techniquesToRender.empty() && commandListData.vs.bindingsToUpdate.empty() &&
+        commandListData.cs.techniquesToRender.empty() && commandListData.cs.bindingsToUpdate.empty())
+        return;
+    unique_lock lock(deviceData.binding_mutex);
     if (commandListData.ps.techniquesToRender.size() > 0 || commandListData.ps.bindingsToUpdate.size() > 0) {
         _RescheduleGroups(commandListData.ps, commandListData, deviceData);
     }

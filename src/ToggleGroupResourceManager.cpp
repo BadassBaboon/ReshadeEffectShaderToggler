@@ -235,7 +235,8 @@ void ToggleGroupResourceManager::CheckGroupBuffers(reshade::api::effect_runtime*
                     // Vulkan images have a concrete format rather than D3D-style typeless
                     // storage. Reuse the compatible render-target view instead of asking
                     // for an alternate sRGB reinterpretation that may be illegal.
-                    resources.rtv_srgb = resources.rtv;
+                    // Consumers fall back to rtv when the optional sRGB view is absent.
+                    resources.rtv_srgb = {};
                 } else if (resources.res != 0 &&
                            !runtime->get_device()->create_resource_view(resources.res,
                                                                         resource_usage::render_target,
@@ -244,6 +245,8 @@ void ToggleGroupResourceManager::CheckGroupBuffers(reshade::api::effect_runtime*
                     reshade::log::message(reshade::log::level::error, "Failed to create group SRGB render target view!");
                 }
             } else if (static_cast<GroupResourceType>(i) == GroupResourceType::RESOURCE_CONSTANTS_COPY) {
+                if (!resources.target_description.buffer.size)
+                    continue;
                 if (!runtime->get_device()->create_resource(
                       resource_desc(resources.target_description.buffer.size, memory_heap::readback, resource_usage::copy_dest | resource_usage::copy_source),
                       nullptr,
@@ -277,7 +280,7 @@ void ToggleGroupResourceManager::SetGroupBufferHandles(ShaderToggler::ToggleGrou
     if (rtv != nullptr)
         *rtv = resources.rtv;
     if (rtv_srgb != nullptr)
-        *rtv_srgb = resources.rtv_srgb;
+        *rtv_srgb = resources.rtv_srgb != 0 ? resources.rtv_srgb : resources.rtv;
     if (srv != nullptr)
         *srv = resources.srv;
 }

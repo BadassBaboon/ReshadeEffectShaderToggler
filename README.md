@@ -63,6 +63,8 @@ This fork adds Direct3D 12, Vulkan and Direct3D 9 (32-bit) support, a rebuilt in
 
 Put the add-on next to the game executable that ReShade is installed for, the same folder as ReShade's dll.
 
+Use `.addon64` for a 64-bit game or `.addon32` for a 32-bit game. Copy the contents of the bundled shader directory, including `REST_Common.fxh`, to a directory in ReShade's **Effect search paths**. REST uses `REST_VULKAN_ALPHA.fx` to preserve alpha on supported Vulkan targets.
+
 Unreal Engine games often have two executables: one in the install folder and one deeper in, such as `GameName\Binaries\Win64\GameName-Win64-Shipping.exe`. REST and ReShade both go in the deeper folder, `GameName\Binaries\Win64` in this example.
 
 Start the game and open the ReShade overlay. You should see a **REST** tab.
@@ -93,7 +95,9 @@ A few rules apply in every mode:
 - A technique assigned to several active groups renders once, in the first group reached during the frame.
 - Within a group, techniques run in ReShade's global order.
 
-Once at least one group is active, REST only renders the techniques those groups use. Something enabled in ReShade can therefore stop showing up because no active group includes it.
+When a group renders effects early, REST renders the remaining enabled techniques at presentation. A technique can therefore appear over the HUD if its group never matches the intended draw.
+
+For constant extraction, `gpu_readback` can read staging buffers on an immediate Direct3D 10 or 11 context and CPU-visible upload buffers on Direct3D 12. Vulkan and GPU-only Direct3D 12 constant buffers require a different capture path. Vulkan push constants can be captured directly using push-constant mode.
 
 ## Marking shaders
 

@@ -1,6 +1,7 @@
 #include "ConstantHandlerBase.h"
 #include "PipelinePrivateData.h"
 #include "StateTracking.h"
+#include "RenderingManager.h"
 #include <cstring>
 
 using namespace Shim::Constants;
@@ -42,6 +43,7 @@ unordered_map<string, tuple<constant_type, vector<effect_uniform_variable>>>* Co
 }
 
 void ConstantHandlerBase::ReloadConstantVariables(effect_runtime* runtime) {
+    unique_lock lock(groupBufferMutex);
     restVariables.clear();
 
     runtime->enumerate_uniform_variables(nullptr, [](effect_runtime* rt, effect_uniform_variable variable) {
@@ -112,6 +114,7 @@ void ConstantHandlerBase::ReloadConstantVariables(effect_runtime* runtime) {
 }
 
 void ConstantHandlerBase::ClearConstantVariables() {
+    unique_lock lock(groupBufferMutex);
     restVariables.clear();
 }
 
@@ -143,7 +146,7 @@ bool ConstantHandlerBase::UpdateConstantBufferEntries(command_list* cmd_list,
     if (desc_size <= 0)
         return false;
 
-    const descriptor_tracking::descriptor_data* buf = state.get_descriptor_at(index, slot, desc);
+    auto buf = state.get_descriptor_at(index, slot, desc);
 
     DescriptorCycle cycle = group->consumeCBCycle();
     if (cycle != CYCLE_NONE) {
@@ -151,27 +154,28 @@ bool ConstantHandlerBase::UpdateConstantBufferEntries(command_list* cmd_list,
             desc = std::min(++desc, desc_size - 1);
             buf = state.get_descriptor_at(index, slot, desc);
 
-            while ((buf == nullptr || buf->constant.buffer == 0) && desc < desc_size - 2) {
+            while ((buf.constant.buffer == 0) && desc < desc_size - 1) {
                 buf = state.get_descriptor_at(index, slot, ++desc);
             }
         } else {
             desc = desc > 0 ? --desc : 0;
             buf = state.get_descriptor_at(index, slot, desc);
 
-            while ((buf == nullptr || buf->constant.buffer == 0) && desc > 0) {
+            while ((buf.constant.buffer == 0) && desc > 0) {
                 buf = state.get_descriptor_at(index, slot, --desc);
             }
         }
 
-        if (buf != nullptr && buf->constant.buffer != 0) {
+        if (buf.constant.buffer != 0) {
             group->setCBDescriptorIndex(desc);
         }
     }
 
-    if (buf != nullptr && buf->constant.buffer != 0) {
+    if (buf.constant.buffer != 0) {
         unique_lock<shared_mutex> lock(groupBufferMutex);
 
-        SetBufferRange(group, buf->constant, cmd_list->get_device(), cmd_list);
+        if (!SetBufferRange(group, buf.constant, cmd_list->get_device(), cmd_list))
+            return false;
         ApplyConstantValues(devData.current_runtime, group, restVariables);
         devData.constantsUpdated.insert(group);
 
@@ -194,7 +198,7 @@ bool ConstantHandlerBase::UpdateConstantEntries(command_list* cmd_list,
     int32_t slot_size = static_cast<int32_t>(state.get_root_table_size_at(index));
     int32_t slot = std::min(static_cast<int32_t>(group->getCBSlotIndex()), slot_size - 1);
 
-    if (slot <= 0)
+    if (slot < 0)
         return false;
 
     int32_t const_buffer_size = static_cast<int32_t>(state.get_root_table_entry_size_at(index, slot));
@@ -204,10 +208,13 @@ bool ConstantHandlerBase::UpdateConstantEntries(command_list* cmd_list,
 
     const vector<uint32_t>* buf = state.get_constants_at(index, slot); // current_constants.at(slot);
 
-    if (buf != nullptr) {
+    if (buf == nullptr || buf->empty())
+        return false;
+
+    {
         unique_lock<shared_mutex> lock(groupBufferMutex);
 
-        SetConstants(group, *buf, cmd_list->get_device(), cmd_list);
+        SetConstants(group, *buf);
         ApplyConstantValues(devData.current_runtime, group, restVariables);
         devData.constantsUpdated.insert(group);
     }
@@ -215,7 +222,7 @@ bool ConstantHandlerBase::UpdateConstantEntries(command_list* cmd_list,
     return true;
 }
 
-void ConstantHandlerBase::UpdateConstants(command_list* cmd_list) {
+void ConstantHandlerBase::UpdateConstants(command_list* cmd_list, uint64_t stages) {
     if (cmd_list == nullptr || cmd_list->get_device() == nullptr) {
         return;
     }
@@ -230,63 +237,19 @@ void ConstantHandlerBase::UpdateConstants(command_list* cmd_list) {
         return;
     }
 
-    vector<ToggleGroup*> psRemovalList;
-    vector<ToggleGroup*> vsRemovalList;
-    vector<ToggleGroup*> csRemovalList;
-
-    for (const auto& cb : commandListData.ps.constantBuffersToUpdate) {
-        if (cb->isRetired()) {
-            psRemovalList.push_back(cb);
-            continue;
-        }
-
-        if (!deviceData.constantsUpdated.contains(cb)) {
-            if (!cb->getCBIsPushMode() && UpdateConstantBufferEntries(cmd_list, commandListData, deviceData, cb, cb->getCBShaderStage()) ||
-                cb->getCBIsPushMode() && UpdateConstantEntries(cmd_list, commandListData, deviceData, cb, cb->getCBShaderStage())) {
-                psRemovalList.push_back(const_cast<ToggleGroup*>(cb));
-            }
-        }
-    }
-
-    for (const auto& cb : commandListData.vs.constantBuffersToUpdate) {
-        if (cb->isRetired()) {
-            vsRemovalList.push_back(cb);
-            continue;
-        }
-
-        if (!deviceData.constantsUpdated.contains(cb)) {
-            if (!cb->getCBIsPushMode() && UpdateConstantBufferEntries(cmd_list, commandListData, deviceData, cb, cb->getCBShaderStage()) ||
-                cb->getCBIsPushMode() && UpdateConstantEntries(cmd_list, commandListData, deviceData, cb, cb->getCBShaderStage())) {
-                vsRemovalList.push_back(const_cast<ToggleGroup*>(cb));
-            }
-        }
-    }
-
-    for (const auto& cb : commandListData.cs.constantBuffersToUpdate) {
-        if (cb->isRetired()) {
-            csRemovalList.push_back(cb);
-            continue;
-        }
-
-        if (!deviceData.constantsUpdated.contains(cb)) {
-            if (!cb->getCBIsPushMode() && UpdateConstantBufferEntries(cmd_list, commandListData, deviceData, cb, cb->getCBShaderStage()) ||
-                cb->getCBIsPushMode() && UpdateConstantEntries(cmd_list, commandListData, deviceData, cb, cb->getCBShaderStage())) {
-                csRemovalList.push_back(const_cast<ToggleGroup*>(cb));
-            }
-        }
-    }
-
-    for (const auto& g : psRemovalList) {
-        commandListData.ps.constantBuffersToUpdate.erase(g);
-    }
-
-    for (const auto& g : vsRemovalList) {
-        commandListData.vs.constantBuffersToUpdate.erase(g);
-    }
-
-    for (const auto& g : csRemovalList) {
-        commandListData.cs.constantBuffersToUpdate.erase(g);
-    }
+    unique_lock bindingLock(deviceData.binding_mutex);
+    auto updateStage = [&](ShaderData& shader) {
+        std::erase_if(shader.constantBuffersToUpdate, [&](ToggleGroup* group) {
+            if (group->isRetired() || !group->isActive() || deviceData.constantsUpdated.contains(group))
+                return true;
+            return group->getCBIsPushMode()
+                ? UpdateConstantEntries(cmd_list, commandListData, deviceData, group, group->getCBShaderStage())
+                : UpdateConstantBufferEntries(cmd_list, commandListData, deviceData, group, group->getCBShaderStage());
+        });
+    };
+    if (stages & Rendering::MATCH_PS) updateStage(commandListData.ps);
+    if (stages & Rendering::MATCH_VS) updateStage(commandListData.vs);
+    if (stages & Rendering::MATCH_CS) updateStage(commandListData.cs);
 }
 
 void ConstantHandlerBase::ApplyConstantValues(effect_runtime* runtime,
@@ -314,7 +277,7 @@ void ConstantHandlerBase::ApplyConstantValues(effect_runtime* runtime,
         uint32_t typeIndex = static_cast<uint32_t>(type);
         size_t bufferSize = groupBufferSize.at(group);
 
-        if (offset + type_size[typeIndex] * type_length[typeIndex] >= bufferSize) {
+        if (offset > bufferSize || type_size[typeIndex] * type_length[typeIndex] > bufferSize - offset) {
             continue;
         }
 
@@ -330,35 +293,44 @@ void ConstantHandlerBase::ApplyConstantValues(effect_runtime* runtime,
     }
 }
 
-void ConstantHandlerBase::SetConstants(const ToggleGroup* group, const vector<uint32_t>& buf, device* dev, command_list* cmd_list) {
-    if (dev == nullptr || cmd_list == nullptr || buf.size() == 0) {
+void ConstantHandlerBase::SetConstants(const ToggleGroup* group, const vector<uint32_t>& buf) {
+    if (buf.empty()) {
         return;
     }
 
-    InitBuffers(group, buf.size());
+    const size_t byteCount = buf.size() * sizeof(buf[0]);
+    InitBuffers(group, byteCount);
 
     vector<uint8_t>& bufferContent = groupBufferContent.at(group);
     vector<uint8_t>& prevBufferContent = groupPrevBufferContent.at(group);
 
-    std::memcpy(prevBufferContent.data(), bufferContent.data(), buf.size());
-    std::memcpy(bufferContent.data(), reinterpret_cast<const uint8_t*>(buf.data()), buf.size() * 4);
+    std::memcpy(prevBufferContent.data(), bufferContent.data(), byteCount);
+    std::memcpy(bufferContent.data(), buf.data(), byteCount);
 }
 
-void ConstantHandlerBase::SetBufferRange(ToggleGroup* group, buffer_range range, device* dev, command_list* cmd_list) {
-    if (dev == nullptr || cmd_list == nullptr || range.buffer == 0) {
-        return;
+bool ConstantHandlerBase::SetBufferRange(ToggleGroup* group, buffer_range range, device* dev, command_list* cmd_list) {
+    if (dev == nullptr || cmd_list == nullptr || range.buffer == 0 || _constCopy == nullptr) {
+        return false;
     }
 
     resource_desc targetBufferDesc = dev->get_resource_desc(range.buffer);
-    size_t size = static_cast<size_t>(targetBufferDesc.buffer.size);
+    if (targetBufferDesc.type != resource_type::buffer || range.offset >= targetBufferDesc.buffer.size)
+        return false;
+    const uint64_t bytes = std::min(range.size, targetBufferDesc.buffer.size - range.offset);
+    if (!bytes || bytes > SIZE_MAX)
+        return false;
+    const size_t size = static_cast<size_t>(bytes);
+
+    // Only publish a capture once the entire requested range is available.
+    thread_local vector<uint8_t> capture;
+    capture.resize(size);
+    if (!_constCopy->GetHostConstantBuffer(cmd_list, group, capture, size, range.buffer.handle, range.offset))
+        return false;
 
     InitBuffers(group, size);
-
-    vector<uint8_t>& bufferContent = groupBufferContent.at(group);
-    vector<uint8_t>& prevBufferContent = groupPrevBufferContent.at(group);
-
-    std::memcpy(prevBufferContent.data(), bufferContent.data(), size);
-    _constCopy->GetHostConstantBuffer(cmd_list, group, bufferContent, size, range.buffer.handle);
+    groupPrevBufferContent.at(group).swap(groupBufferContent.at(group));
+    groupBufferContent.at(group).swap(capture);
+    return true;
 }
 
 void ConstantHandlerBase::InitBuffers(const ToggleGroup* group, size_t size) {
@@ -376,6 +348,7 @@ void ConstantHandlerBase::InitBuffers(const ToggleGroup* group, size_t size) {
 }
 
 void ConstantHandlerBase::RemoveGroup(const ToggleGroup* group, device* dev) {
+    unique_lock lock(groupBufferMutex);
     if (!groupBufferContent.contains(group)) {
         return;
     }

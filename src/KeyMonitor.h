@@ -42,38 +42,26 @@ class __declspec(novtable) KeyMonitor final {
         if (initialized)
             return;
 
-        static const size_t bufSize = 64;
-        static char buf[bufSize];
-        static size_t readSize = bufSize;
+        for (const auto& [id, config] : reshadeConfigMapping) {
+            const auto& [section, name] = config;
+            char values[64] = {};
+            size_t size = sizeof(values);
+            if (!reshade::get_config_value(runtime, section.c_str(), name.c_str(), values, &size))
+                continue;
 
-        for (auto& configData : reshadeConfigMapping) {
-            uint32_t keyCombo = 0;
-
-            const auto& [id, data] = configData;
-            const auto& [section, name] = data;
-
-            if (reshade::get_config_value(runtime, section.c_str(), name.c_str(), buf, &readSize)) {
-                const char* delim = ",";
-                char* next_token = NULL;
-                char* token = NULL;
-                uint32_t index = 0;
-
-                token = strtok_s(buf, delim, &next_token);
-                while (token != NULL) {
-                    size_t substringLength = strlen(token);
-                    uint32_t key = 0;
-                    const auto& [ptr, etc] = std::from_chars(token, token + substringLength, key);
-                    key = (key << (index * 8));
-                    keyCombo |= key;
-
-                    index++;
-                    token = strtok_s(NULL, delim, &next_token);
-                }
-
-                SetKeyMonitor(configData.first, keyCombo);
+            // ReShade returns INI list elements as consecutive NUL-terminated strings.
+            uint32_t combo = 0;
+            const char* value = values;
+            for (uint32_t i = 0; i < 4 && value < values + size && *value; ++i) {
+                const char* end = value + std::strlen(value);
+                uint32_t key = 0;
+                const auto parsed = std::from_chars(value, end, key);
+                if (parsed.ec != std::errc{} || parsed.ptr != end || key > 255)
+                    break;
+                combo |= key << (8 * i);
+                value = end + 1;
             }
-
-            readSize = bufSize;
+            SetKeyMonitor(id, combo);
         }
 
         initialized = true;

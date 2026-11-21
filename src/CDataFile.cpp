@@ -69,7 +69,7 @@ CDataFile::CDataFile(t_Str szFileName) {
     m_bDirty = false;
     m_szFileName = szFileName;
     m_Flags = (AUTOCREATE_SECTIONS | AUTOCREATE_KEYS);
-    m_Sections.push_back(*(new t_Section));
+    m_Sections.emplace_back();
 
     Load(m_szFileName);
 }
@@ -77,13 +77,13 @@ CDataFile::CDataFile(t_Str szFileName) {
 CDataFile::CDataFile() {
     Clear();
     m_Flags = (AUTOCREATE_SECTIONS | AUTOCREATE_KEYS);
-    m_Sections.push_back(*(new t_Section));
+    m_Sections.emplace_back();
 }
 
 // ~CDataFile
 // Saves the file if any values have changed since the last save.
 CDataFile::~CDataFile() {
-    if (m_bDirty)
+    if (m_bDirty && !m_szFileName.empty())
         Save();
 }
 
@@ -115,79 +115,22 @@ void CDataFile::SetFileName(t_Str szFileName) {
 bool CDataFile::Load(t_Str szFileName) {
     // We dont want to create a new file here.  If it doesn't exist, just
     // return false and report the failure.
-    fstream File(szFileName.c_str(), ios::in);
-
-    if (File.is_open()) {
-        bool bDone = false;
-        bool bAutoKey = (m_Flags & AUTOCREATE_KEYS) == AUTOCREATE_KEYS;
-        bool bAutoSec = (m_Flags & AUTOCREATE_SECTIONS) == AUTOCREATE_SECTIONS;
-
-        t_Str szLine;
-        t_Str szComment;
-        t_Section* pSection = GetSection("");
-
-        // These need to be set, we'll restore the original values later.
-        m_Flags |= AUTOCREATE_KEYS;
-        m_Flags |= AUTOCREATE_SECTIONS;
-
-        while (!bDone) {
-            std::getline(File, szLine);
-
-            Trim(szLine);
-
-            bDone = (File.eof() || File.bad() || File.fail());
-
-            if (szLine.find_first_of(CommentIndicators) == 0) {
-                szComment += "\n";
-                szComment += szLine;
-            } else if (szLine.find_first_of('[') == 0) // new section
-            {
-                szLine.erase(0, 1);
-                szLine.erase(szLine.find_last_of(']'), 1);
-
-                CreateSection(szLine, szComment);
-                pSection = GetSection(szLine);
-                szComment = t_Str("");
-            } else if (szLine.size() > 0) // we have a key, add this key/value pair
-            {
-                t_Str szKey = GetNextWord(szLine);
-                t_Str szValue = szLine;
-
-                if (szKey.size() > 0 && szValue.size() > 0) {
-                    SetValue(szKey, szValue, szComment, pSection->szName);
-                    szComment = t_Str("");
-                }
-            }
-        }
-
-        // Restore the original flag values.
-        if (!bAutoKey)
-            m_Flags &= ~AUTOCREATE_KEYS;
-
-        if (!bAutoSec)
-            m_Flags &= ~AUTOCREATE_SECTIONS;
-    } else {
-        Report(E_INFO, "[CDataFile::Load] Unable to open file. Does it exist?");
+    std::ifstream stream(szFileName);
+    if (!stream)
         return false;
-    }
-
-    File.close();
-    // Parsing uses the normal setters internally, but a successful load itself is
-    // not a user modification and must not trigger an implicit save in the destructor.
-    m_bDirty = false;
-
-    return true;
+    return Parse(stream);
 }
 
 bool CDataFile::LoadFromString(const t_Str& contents) {
-    Clear();
-    m_Flags = (AUTOCREATE_SECTIONS | AUTOCREATE_KEYS);
-    m_Sections.push_back(t_Section{});
-
     std::istringstream stream(contents);
+    return Parse(stream);
+}
+
+bool CDataFile::Parse(std::istream& stream) {
+    CDataFile parsed;
     t_Str szLine;
     t_Str szComment;
-    t_Section* pSection = GetSection("");
+    t_Section* pSection = parsed.GetSection("");
 
     while (std::getline(stream, szLine)) {
         Trim(szLine);
@@ -202,19 +145,22 @@ bool CDataFile::LoadFromString(const t_Str& contents) {
 
             szLine.erase(0, 1);
             szLine.erase(end - 1, 1);
-            CreateSection(szLine, szComment);
-            pSection = GetSection(szLine);
+            parsed.CreateSection(szLine, szComment);
+            pSection = parsed.GetSection(szLine);
             szComment.clear();
         } else if (!szLine.empty()) {
             t_Str szKey = GetNextWord(szLine);
             t_Str szValue = szLine;
             if (!szKey.empty() && !szValue.empty() && pSection != nullptr) {
-                SetValue(szKey, szValue, szComment, pSection->szName);
+                parsed.SetValue(szKey, szValue, szComment, pSection->szName);
                 szComment.clear();
             }
         }
     }
 
+    if (stream.bad())
+        return false;
+    m_Sections.swap(parsed.m_Sections);
     m_bDirty = false;
     return true;
 }
@@ -309,10 +255,10 @@ bool CDataFile::Save() {
         return false;
     }
 
-    m_bDirty = false;
-
-    File.flush();
     File.close();
+    if (!File)
+        return false;
+    m_bDirty = false;
 
     return true;
 }
@@ -377,15 +323,13 @@ bool CDataFile::SetValue(t_Str szKey, t_Str szValue, t_Str szComment, t_Str szSe
     // if the key does not exist in that section, and the value passed
     // is not t_Str("") then add the new key.
     if (pKey == NULL && szValue.size() > 0 && (m_Flags & AUTOCREATE_KEYS)) {
-        pKey = new t_Key;
+        pKey = &pSection->Keys.emplace_back();
 
         pKey->szKey = szKey;
         pKey->szValue = szValue;
         pKey->szComment = szComment;
 
         m_bDirty = true;
-
-        pSection->Keys.push_back(*pKey);
 
         return true;
     }
@@ -590,11 +534,10 @@ bool CDataFile::CreateSection(t_Str szSection, t_Str szComment) {
         return false;
     }
 
-    pSection = new t_Section;
+    pSection = &m_Sections.emplace_back();
 
     pSection->szName = szSection;
     pSection->szComment = szComment;
-    m_Sections.push_back(*pSection);
     m_bDirty = true;
 
     return true;
@@ -615,19 +558,7 @@ bool CDataFile::CreateSection(t_Str szSection, t_Str szComment, KeyList Keys) {
     if (!pSection)
         return false;
 
-    KeyItor k_pos;
-
-    pSection->szName = szSection;
-    for (k_pos = Keys.begin(); k_pos != Keys.end(); k_pos++) {
-        t_Key* pKey = new t_Key;
-        pKey->szComment = (*k_pos).szComment;
-        pKey->szKey = (*k_pos).szKey;
-        pKey->szValue = (*k_pos).szValue;
-
-        pSection->Keys.push_back(*pKey);
-    }
-
-    m_Sections.push_back(*pSection);
+    pSection->Keys = std::move(Keys);
     m_bDirty = true;
 
     return true;
@@ -745,23 +676,13 @@ int CompareNoCase(t_Str str1, t_Str str2) {
 // Trim
 // Trims whitespace from both sides of a string.
 void Trim(t_Str& szStr) {
-    t_Str szTrimChars = WhiteSpace;
-
-    szTrimChars += EqualIndicators;
-    int nPos, rPos;
-
-    // trim left
-    nPos = static_cast<int>(szStr.find_first_not_of(szTrimChars));
-
-    if (nPos > 0)
-        szStr.erase(0, nPos);
-
-    // trim right and return
-    nPos = static_cast<int>(szStr.find_last_not_of(szTrimChars));
-    rPos = static_cast<int>(szStr.find_last_of(szTrimChars));
-
-    if (rPos > nPos && rPos > -1)
-        szStr.erase(rPos, szStr.size() - rPos);
+    const auto first = szStr.find_first_not_of(WhiteSpace);
+    if (first == t_Str::npos) {
+        szStr.clear();
+        return;
+    }
+    szStr.erase(szStr.find_last_not_of(WhiteSpace) + 1);
+    szStr.erase(0, first);
 }
 
 // WriteLn

@@ -28,6 +28,8 @@ bool RenderingEffectManager::RenderRemainingEffects(effect_runtime* runtime) {
     device* device = runtime->get_device();
     RuntimeDataContainer& runtimeData = (*runtime->get_private_data<RuntimeDataContainer>());
     DeviceDataContainer& deviceData = (*device->get_private_data<DeviceDataContainer>());
+    unique_lock renderLock(deviceData.render_mutex);
+    shared_lock techLock(runtimeData.technique_mutex);
     bool rendered = false;
 
     resource res = runtime->get_current_back_buffer();
@@ -97,11 +99,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
 
         // A group can be retired (removed in the UI) while its entry is still queued here. It is kept
         // alive for exactly this reason, but must not render anymore.
-        if (group->isRetired()) {
-            continue;
-        }
-
-        if (cmdData.hasDrawGeometry && !group->matchesDrawGeometry(cmdData.isIndexedDraw, cmdData.currentDrawCount, cmdData.currentInstanceCount)) {
+        if (group->isRetired() || !group->isActive()) {
             continue;
         }
 
@@ -140,7 +138,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         const bool vulkanNativeStaging = vulkanAutoSceneColour && wantsNativeStaging;
         resource_usage vulkanTargetUsage = resource_usage::render_target;
 
-        if (vulkanAutoSceneColour) {
+        if (deviceApi == device_api::vulkan) {
             // ReShade's Vulkan render_technique path always copies the supplied colour
             // target into its effect-colour texture before the first pass, so the live
             // image must already have transfer-source usage. Native staging additionally
@@ -170,7 +168,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         // ReShade effect rendering and transfer/blit commands would be invalid there,
         // so defer Auto Scene Colour until a later begin_render_pass callback, which
         // ReShade invokes before the Vulkan render pass actually begins.
-        if (vulkanAutoSceneColour) {
+        if (deviceApi == device_api::vulkan) {
             if (!vulkanSafeBoundary) {
                 // Move Vulkan Auto work out of the current command-list queue. A later
                 // continuation pass may be recorded on a different command buffer, so
@@ -311,11 +309,11 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
             cmd_list->barrier(active_resource.resource, resource_usage::shader_resource, resource_usage::render_target);
         }
 
-        if (!useNativeStaging && preserveTargetAlpha) {
+        if (!useNativeStaging && preserveTargetAlpha && deviceApi != device_api::vulkan) {
             resource group_res = {};
             groupResourceManager.SetGroupBufferHandles(group, GroupResourceType::RESOURCE_ALPHA, &group_res, &view_non_srgb, &view_srgb, &group_view);
 
-            const bool strict_copy = (runtime->get_device()->get_api() == reshade::api::device_api::d3d12 || runtime->get_device()->get_api() == reshade::api::device_api::vulkan);
+            const bool strict_copy = deviceApi == device_api::d3d12;
             const reshade::api::format copy_typeless = format_to_typeless(desc.texture.format);
             const bool format_copyable = !strict_copy ||
                                          copy_typeless == reshade::api::format::r8g8b8a8_typeless ||
@@ -324,21 +322,23 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
             const bool compatible =
                 groupResourceManager.IsCompatibleWithGroupFormat(runtime->get_device(), GroupResourceType::RESOURCE_ALPHA, active_resource.resource, group);
             const bool source_copyable = desc.texture.samples <= 1 && desc.type == resource_type::texture_2d && format_copyable;
-            if (group_res != 0 && compatible && source_copyable) {
+            if (group_res != 0 && group_view != 0 && view_non_srgb != 0 && view->rtv != 0 && compatible && source_copyable && desc.texture.depth_or_layers == 1) {
                 std::vector<reshade::api::resource_view> bound_rtvs;
                 reshade::api::resource_view bound_dsv = { 0 };
 
                 if (strict_copy) {
                     bound_rtvs = (*cmd_list->get_private_data<state_tracking>()).render_targets;
                     bound_dsv = (*cmd_list->get_private_data<state_tracking>()).depth_stencil;
-                    // Unbind render targets so we can safely transition them without DX12 validation errors
+                    cmd_list->barrier(active_resource.resource, resource_usage::render_target, resource_usage::copy_source);
+                    // Unbind the game's targets during the copy.
                     cmd_list->bind_render_targets_and_depth_stencil(0, nullptr, { 0 });
                 }
 
                 cmd_list->copy_resource(active_resource.resource, group_res);
 
                 if (strict_copy) {
-                    // Rebind targets. ReShade's wrapper will automatically transition them back to RENDER_TARGET.
+                    cmd_list->barrier(active_resource.resource, resource_usage::copy_source, resource_usage::render_target);
+                    cmd_list->barrier(group_res, resource_usage::copy_dest, resource_usage::render_target);
                     cmd_list->bind_render_targets_and_depth_stencil(static_cast<uint32_t>(bound_rtvs.size()), bound_rtvs.data(), bound_dsv);
                 }
 
@@ -347,7 +347,7 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                 view_non_srgb = view->rtv;
                 view_srgb = view->rtv_srgb;
 
-                if (!compatible) {
+                if (!compatible && source_copyable && desc.texture.depth_or_layers == 1 && desc.texture.levels == 1) {
                     groupResource.state = GroupResourceState::RESOURCE_INVALID;
                     groupResource.target_description = desc;
                     groupResource.view_format = active_resource.format;
@@ -397,10 +397,17 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
         }
 
         const bool restoreVulkanDirectTarget =
-          vulkanAutoSceneColour && vulkanSafeBoundary && !useNativeStaging &&
+          deviceApi == device_api::vulkan && vulkanSafeBoundary && !useNativeStaging &&
           vulkanTargetUsage != resource_usage::render_target;
         if (restoreVulkanDirectTarget)
             cmd_list->barrier(active_resource.resource, vulkanTargetUsage, resource_usage::render_target);
+
+        const auto alphaFormat = format_to_typeless(desc.texture.format);
+        const bool preserveVulkanAlpha = deviceApi == device_api::vulkan && preserveTargetAlpha &&
+            (alphaFormat == format::r8g8b8a8_typeless || alphaFormat == format::b8g8r8a8_typeless) &&
+            runtimeData.specialEffects[REST_SAVE_ALPHA].technique != 0 && runtimeData.specialEffects[REST_RESTORE_ALPHA].technique != 0;
+        if (preserveVulkanAlpha)
+            runtime->render_technique(runtimeData.specialEffects[REST_SAVE_ALPHA].technique, cmd_list, view_non_srgb, view_srgb);
 
         if (group->getFlipBuffer() && runtimeData.specialEffects[REST_FLIP].technique != 0) {
             runtime->render_technique(runtimeData.specialEffects[REST_FLIP].technique, cmd_list, view_non_srgb, view_srgb);
@@ -464,11 +471,18 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
             runtime->render_technique(runtimeData.specialEffects[REST_FLIP].technique, cmd_list, view_non_srgb, view_srgb);
         }
 
+        if (preserveVulkanAlpha)
+            runtime->render_technique(runtimeData.specialEffects[REST_RESTORE_ALPHA].technique, cmd_list, view_non_srgb, view_srgb);
+
         if (copyPreserveAlpha) {
+            if (deviceApi == device_api::d3d12)
+                cmd_list->barrier(groupResource.res, resource_usage::render_target, resource_usage::shader_resource);
             resource_view target_view_non_srgb = view->rtv;
 
             if (target_view_non_srgb != 0)
                 shaderManager.CopyResourceMaskAlpha(cmd_list, group_view, target_view_non_srgb, desc.texture.width, desc.texture.height);
+            if (deviceApi == device_api::d3d12)
+                cmd_list->barrier(groupResource.res, resource_usage::shader_resource, resource_usage::copy_dest);
         }
 
         if (useNativeStaging) {
@@ -592,12 +606,13 @@ void RenderingEffectManager::_RenderDeferredVulkanAutoEffects(
         return;
 
     RuntimeDataContainer& runtimeData = (*deviceData.current_runtime->get_private_data<RuntimeDataContainer>());
+    shared_lock techLock(runtimeData.technique_mutex);
     unordered_set<EffectData*> toRenderNames;
 
     for (const auto& [effect, data] : deviceData.vulkanAutoPendingEffects) {
         if (effect == nullptr || data.group == nullptr || data.resource == 0)
             continue;
-        if (!data.group->isAutoSceneColourActive(device_api::vulkan))
+        if (data.group->isRetired() || !data.group->isActive())
             continue;
         if (!safeTargets.contains(data.resource.handle))
             continue;
@@ -620,15 +635,15 @@ void RenderingEffectManager::_RenderDeferredVulkanAutoEffects(
 
     vector<EffectData*> removalList;
 
-    shared_lock<shared_mutex> techLock(runtimeData.technique_mutex);
-    _RenderEffects(cmd_list,
+    if (_RenderEffects(cmd_list,
                    deviceData,
                    runtimeData,
                    deviceData.vulkanAutoPendingEffects,
                    removalList,
                    toRenderNames,
                    true,
-                   &safeTargets);
+                   &safeTargets))
+        cmd_list->get_private_data<state_tracking>()->apply(cmd_list);
     techLock.unlock();
 
     for (auto* effect : removalList) {
@@ -661,6 +676,7 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
     RestDiag::ScopedCpuTimer renderEffectsTimer(RestDiag::g_counters.renderEffectsCpuMicros);
     unique_lock<shared_mutex> renderLock(deviceData.render_mutex);
 
+    commandListData.SyncEffectGeneration(deviceData.effectGeneration);
     if (deviceData.current_runtime == nullptr || (commandListData.ps.techniquesToRender.size() == 0 && commandListData.vs.techniquesToRender.size() == 0 &&
                                                   commandListData.cs.techniquesToRender.size() == 0)) {
         return;

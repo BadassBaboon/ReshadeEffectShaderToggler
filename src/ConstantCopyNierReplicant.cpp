@@ -22,14 +22,15 @@ bool ConstantCopyNierReplicant::UnInit() {
 
 void ConstantCopyNierReplicant::OnMapBufferRegion(device* device, resource resource, uint64_t offset, uint64_t size, map_access access, void** data) {
     if (Origin != nullptr && (access == map_access::write_discard || access == map_access::write_only)) {
-        resource_desc desc = device->get_resource_desc(resource);
-
-        std::shared_lock<std::shared_mutex> lock(deviceHostMutex);
+        std::unique_lock<std::shared_mutex> lock(deviceHostMutex);
         const auto& it = deviceToHostConstantBuffer.find(resource.handle);
 
         if (it != deviceToHostConstantBuffer.end()) {
             auto& [_, buf] = *it;
-            memmove(buf.data(), Origin, Size);
+            if (offset < buf.size()) {
+                const size_t bytes = static_cast<size_t>(std::min<uint64_t>(size, buf.size() - offset));
+                memmove(buf.data() + offset, Origin, std::min(Size, bytes));
+            }
         }
     }
 }

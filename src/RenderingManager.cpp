@@ -141,7 +141,7 @@ bool RenderingManager::check_aspect_ratio(float width_to_check, float height_to_
 
 void RenderingManager::CycleDescriptors(ShaderToggler::ToggleGroup* group,
                                         state_tracking& state,
-                                        const descriptor_tracking::descriptor_data* buf,
+                                        descriptor_tracking::descriptor_data& buf,
                                         uint32_t stageIndex,
                                         int32_t slot,
                                         int32_t& desc,
@@ -153,20 +153,20 @@ void RenderingManager::CycleDescriptors(ShaderToggler::ToggleGroup* group,
             desc = std::min(++desc, desc_size - 1);
             buf = state.get_descriptor_at(stageIndex, slot, desc);
 
-            while ((buf == nullptr || buf->view == 0) && desc < desc_size - 2) {
+            while ((buf.view == 0) && desc < desc_size - 1) {
                 buf = state.get_descriptor_at(stageIndex, slot, ++desc);
             }
         } else {
             desc = desc > 0 ? --desc : 0;
             buf = state.get_descriptor_at(stageIndex, slot, desc);
 
-            while ((buf == nullptr || buf->view == 0) && desc > 0) {
+            while ((buf.view == 0) && desc > 0) {
                 buf = state.get_descriptor_at(stageIndex, slot, --desc);
             }
         }
 
-        if (buf != nullptr && buf->view != 0) {
-            group->setBindingSRVDescriptorIndex(desc);
+        if (buf.view != 0) {
+            descSetter(desc);
         }
     }
 }
@@ -325,13 +325,13 @@ const ResourceViewData RenderingManager::GetCurrentResourceView(command_list* cm
         if (desc_size <= 0)
             return active_data;
 
-        const descriptor_tracking::descriptor_data* buf = state.get_descriptor_at(stageIndex, slot, desc);
+        auto buf = state.get_descriptor_at(stageIndex, slot, desc);
 
         CycleDescriptors(group, state, buf, stageIndex, slot, desc, desc_size, [group](uint32_t idx) { group->setBindingSRVDescriptorIndex(idx); });
 
-        if (buf != nullptr && buf->view != 0) {
-            active_data.resource = device->get_resource_from_view(buf->view);
-            active_data.format = device->get_resource_view_desc(buf->view).format;
+        if (buf.view != 0) {
+            active_data.resource = device->get_resource_from_view(buf.view);
+            active_data.format = device->get_resource_view_desc(buf.view).format;
         }
     } else if (action & MATCH_BINDING && !group->getExtractResourceViews() && rtvs.size() > 0 && rtvs[bindingRTindex] != 0) {
         resource rs = device->get_resource_from_view(rtvs[bindingRTindex]);
@@ -383,12 +383,12 @@ const ResourceViewData RenderingManager::GetCurrentResourceView(command_list* cm
         if (desc_size <= 0)
             return active_data;
 
-        const descriptor_tracking::descriptor_data* buf = state.get_descriptor_at(stageIndex, slot, desc);
+        auto buf = state.get_descriptor_at(stageIndex, slot, desc);
 
         CycleDescriptors(group, state, buf, stageIndex, slot, desc, desc_size, [group](uint32_t idx) { group->setRenderSRVDescriptorIndex(idx); });
 
-        if (buf != nullptr && buf->view != 0) {
-            resource rs = device->get_resource_from_view(buf->view);
+        if (buf.view != 0) {
+            resource rs = device->get_resource_from_view(buf.view);
 
             if (rs == 0) {
                 // Render targets may not have a resource bound in D3D12, in which case writes to them are discarded
@@ -397,7 +397,7 @@ const ResourceViewData RenderingManager::GetCurrentResourceView(command_list* cm
 
             // Don't apply effects to non-RGB buffers
             resource_desc desc = device->get_resource_desc(rs);
-            resource_view_desc v_desc = device->get_resource_view_desc(buf->view);
+            resource_view_desc v_desc = device->get_resource_view_desc(buf.view);
 
             if (!ValidFormat(deviceData.current_runtime, desc, group->getMatchSwapchainResolution())) {
                 return active_data;
@@ -425,13 +425,20 @@ void RenderingManager::QueueOrDequeue(command_list* cmd_list,
         // A group can be retired (removed in the UI) while its entry is still queued here. Its GPU
         // resources have already been disposed by the removal callback, so drop the entry instead of
         // querying resources for it. (The object itself stays alive so this erase is safe.)
-        if (data.group->isRetired()) {
+        if (data.group->isRetired() || !data.group->isActive()) {
             it = queue.erase(it);
             continue;
         }
 
         // Set views during draw call since we can be sure the correct ones are bound at that point
         if (!callLocation && data.resource == 0) {
+            if (data.group->hasGeometryFilter() &&
+                (!commandListData.hasDrawGeometry || !data.group->matchesDrawGeometry(commandListData.isIndexedDraw, commandListData.currentDrawCount,
+                                                                                       commandListData.currentInstanceCount))) {
+                commandListData.commandQueue |= action;
+                ++it;
+                continue;
+            }
             ResourceViewData active_data = GetCurrentResourceView(cmd_list, deviceData, data.group, commandListData, layoutIndex, action);
 
             if (active_data.resource != 0) {
@@ -448,7 +455,7 @@ void RenderingManager::QueueOrDequeue(command_list* cmd_list,
         }
 
         // Queue updates depending on the place their supposed to be called at
-        if (data.resource != 0 && (!callLocation && !data.invocationLocation || callLocation & data.invocationLocation)) {
+        if (data.resource != 0 && callLocation == data.invocationLocation) {
             immediateQueue.insert(name);
         }
 
