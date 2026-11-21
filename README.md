@@ -97,6 +97,8 @@ A few rules apply in every mode:
 
 When a group renders effects early, REST renders the remaining enabled techniques at presentation. A technique can therefore appear over the HUD if its group never matches the intended draw.
 
+On Vulkan, REST waits until the game ends the active render pass and reaches a compatible boundary for the matched target. If the scene and HUD share one uninterrupted pass, the effect can fall back to presentation. Draw suppression still works inside that pass.
+
 For constant extraction, `gpu_readback` can read staging buffers on an immediate Direct3D 10 or 11 context and CPU-visible upload buffers on Direct3D 12. Vulkan and GPU-only Direct3D 12 constant buffers require a different capture path. Vulkan push constants can be captured directly using push-constant mode.
 
 ## Marking shaders

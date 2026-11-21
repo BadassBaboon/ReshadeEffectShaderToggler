@@ -43,8 +43,11 @@ bool RenderingEffectManager::RenderRemainingEffects(effect_runtime* runtime) {
     resource_view active_rtv = view->rtv;
     resource_view active_rtv_srgb = view->rtv_srgb;
 
+    const bool explicitStates = device->get_api() == device_api::vulkan || device->get_api() == device_api::d3d12;
     for (auto& eff : runtimeData.allSortedTechniques) {
         if (eff->enabled && !eff->rendered) {
+            if (!rendered && explicitStates)
+                cmd_list->barrier(res, resource_usage::present, resource_usage::render_target);
             runtime->render_technique(eff->technique, cmd_list, active_rtv, active_rtv_srgb);
 
             eff->rendered = true;
@@ -52,6 +55,8 @@ bool RenderingEffectManager::RenderRemainingEffects(effect_runtime* runtime) {
         }
     }
 
+    if (rendered && explicitStates)
+        cmd_list->barrier(res, resource_usage::render_target, resource_usage::present);
     return rendered;
 }
 
@@ -396,6 +401,12 @@ bool RenderingEffectManager::_RenderEffects(command_list* cmd_list,
                              effectMismatch ? " | differs from swapchain (separate ReShade effect permutation)" : "");
         }
 
+        // Leave the normal present path available when a queued group never reaches a usable target.
+        if (!deviceData.rendered_effects) {
+            runtime->render_effects(cmd_list, resource_view{}, resource_view{});
+            deviceData.rendered_effects = true;
+        }
+
         const bool restoreVulkanDirectTarget =
           deviceApi == device_api::vulkan && vulkanSafeBoundary && !useNativeStaging &&
           vulkanTargetUsage != resource_usage::render_target;
@@ -628,11 +639,6 @@ void RenderingEffectManager::_RenderDeferredVulkanAutoEffects(
     CommandListDataContainer& commandListData = (*cmd_list->get_private_data<CommandListDataContainer>());
     commandListData.vulkanAutoInjectionActive = true;
 
-    if (!deviceData.rendered_effects) {
-        deviceData.current_runtime->render_effects(cmd_list, resource_view{ 0 }, resource_view{ 0 });
-        deviceData.rendered_effects = true;
-    }
-
     vector<EffectData*> removalList;
 
     if (_RenderEffects(cmd_list,
@@ -712,11 +718,6 @@ void RenderingEffectManager::RenderEffects(command_list* cmd_list, uint64_t call
         return;
     }
 
-    if (!deviceData.rendered_effects) {
-        deviceData.current_runtime->render_effects(cmd_list, resource_view{ 0 }, resource_view{ 0 });
-        deviceData.rendered_effects = true;
-    }
-
     shared_lock<shared_mutex> techLock(runtimeData.technique_mutex);
     bool psRendered = false;
     if (psToRenderNames.size() > 0) {
@@ -758,7 +759,7 @@ void RenderingEffectManager::PreventRuntimeReload(reshade::api::effect_runtime* 
     RuntimeDataContainer& runtimeData = (*runtime->get_private_data<RuntimeDataContainer>());
     DeviceDataContainer& deviceData = (*runtime->get_device()->get_private_data<DeviceDataContainer>());
 
-    // cringe
+    shared_lock techLock(runtimeData.technique_mutex);
     if (runtimeData.specialEffects[REST_NOOP].technique != 0) {
         resource res = runtime->get_current_back_buffer();
         const std::shared_ptr<GlobalResourceView>& view = resourceManager.GetResourceView(runtime->get_device(), res.handle);
@@ -773,6 +774,12 @@ void RenderingEffectManager::PreventRuntimeReload(reshade::api::effect_runtime* 
             runtime->render_technique(
               runtimeData.specialEffects[REST_NOOP].technique, cmd_list, deviceData.resourceManagerData.dummy_rtv, deviceData.resourceManagerData.dummy_rtv);
 
+        const auto api = runtime->get_device()->get_api();
+        const bool explicitStates = api == device_api::vulkan || api == device_api::d3d12;
+        if (explicitStates)
+            cmd_list->barrier(res, resource_usage::present, resource_usage::render_target);
         runtime->render_technique(runtimeData.specialEffects[REST_NOOP].technique, cmd_list, active_rtv, active_rtv_srgb);
+        if (explicitStates)
+            cmd_list->barrier(res, resource_usage::render_target, resource_usage::present);
     }
 }

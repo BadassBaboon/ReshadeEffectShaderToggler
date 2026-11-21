@@ -50,9 +50,9 @@ void ResourceManager::InitBackbuffer(swapchain* runtime) {
 
     resource_desc desc = dev->get_resource_desc(runtime->get_back_buffer(0));
 
-    resource_desc dummy_desc = desc;
-    dummy_desc.texture.height = 1;
-    dummy_desc.texture.width = 1;
+    // A Vulkan swapchain image can report an unknown heap. A private texture needs its own allocation.
+    const resource_desc dummy_desc(1, 1, 1, 1, desc.texture.format, 1, memory_heap::default_,
+        resource_usage::render_target | resource_usage::copy_source);
 
     bool resCreated = runtime->get_device()->create_resource(dummy_desc, nullptr, resource_usage::render_target, &data.resourceManagerData.dummy_res);
 
